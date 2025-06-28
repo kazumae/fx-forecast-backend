@@ -1,0 +1,13 @@
+# Crontab for batch jobs
+# Format: minute hour day month day_of_week command
+
+# 毎時0分に為替レートを取得
+0 * * * * cd /app && python run_batch.py fetch_forex_rates >> /var/log/cron.log 2>&1
+
+# 毎日午前3時に古いデータをクリーンアップ
+0 3 * * * cd /app && python run_batch.py cleanup_old_data >> /var/log/cron.log 2>&1
+
+# 毎日午前6時に日次レポートを生成
+0 6 * * * cd /app && python run_batch.py generate_daily_report >> /var/log/cron.log 2>&1
+
+# 空行が必要（cronの仕様）
