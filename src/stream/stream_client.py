@@ -13,6 +13,7 @@ from pathlib import Path
 from .config import StreamConfig
 from .websocket_manager import WebSocketManager
 from .data_processor import DataProcessor
+from .logging_utils import SensitiveDataFilter
 
 
 class StreamClient:
@@ -64,8 +65,17 @@ class StreamClient:
         logger.addHandler(console_handler)
         logger.addHandler(file_handler)
         
+        # Add sensitive data filter
+        sensitive_patterns = []
+        if hasattr(config, 'api_key') and config.api_key:
+            sensitive_patterns.append(config.api_key)
+        
+        sensitive_filter = SensitiveDataFilter(sensitive_patterns)
+        for handler in logger.handlers:
+            handler.addFilter(sensitive_filter)
+        
         self.logger = logging.getLogger(__name__)
-        self.logger.info("Logging setup complete")
+        self.logger.info("Logging setup complete with sensitive data filtering")
     
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown"""

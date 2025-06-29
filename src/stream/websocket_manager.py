@@ -237,7 +237,7 @@ class WebSocketManager:
             message = json.dumps(auth_message)
             self.ws.send(message)
             self.logger.info("Authentication message sent")
-            self.logger.debug(f"Auth message: userKey=***{self.config.api_key[-4:]}")
+            self.logger.debug(f"Sending authentication message to TraderMade")
         except Exception as e:
             self.error_handler.handle_error(e, "Authentication send")
             self.close()
