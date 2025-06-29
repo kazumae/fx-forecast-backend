@@ -14,6 +14,7 @@ from .config import StreamConfig
 from .websocket_manager import WebSocketManager
 from .data_processor import DataProcessor
 from .logging_utils import SensitiveDataFilter
+from .graceful_shutdown import GracefulShutdownHandler
 
 
 class StreamClient:
@@ -25,6 +26,7 @@ class StreamClient:
         self.websocket_manager = None
         self.data_processor = None
         self.logger = None
+        self.shutdown_handler = None
         self.running = True
         
     def setup_logging(self, config: StreamConfig):
@@ -79,18 +81,20 @@ class StreamClient:
     
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown"""
-        signal.signal(signal.SIGTERM, self._handle_signal)
-        signal.signal(signal.SIGINT, self._handle_signal)
-        self.logger.info("Signal handlers registered")
-    
-    def _handle_signal(self, signum, frame):
-        """Handle shutdown signals"""
-        signal_name = signal.Signals(signum).name
-        self.logger.info(f"Received {signal_name}, initiating graceful shutdown")
-        self.running = False
+        # Create graceful shutdown handler
+        self.shutdown_handler = GracefulShutdownHandler(
+            websocket_manager=self.websocket_manager,
+            data_processor=self.data_processor,
+            timeout=10
+        )
+        self.shutdown_handler.setup_signal_handlers()
         
-        if self.websocket_manager:
-            self.websocket_manager.close()
+        # Set running flag to False when shutdown is initiated
+        def on_shutdown():
+            self.running = False
+        
+        # This will be called from the shutdown handler thread
+        self._on_shutdown = on_shutdown
     
     def run(self):
         """Run the streaming client"""
@@ -108,14 +112,14 @@ class StreamClient:
             self.logger.info(f"WebSocket URL: {self.config.websocket_url}")
             self.logger.info("=" * 50)
             
-            # Setup signal handlers
-            self.setup_signal_handlers()
-            
             # Create WebSocket manager
             self.websocket_manager = WebSocketManager(self.config)
             
             # Create data processor
             self.data_processor = DataProcessor()
+            
+            # Setup signal handlers (after creating managers)
+            self.setup_signal_handlers()
             
             # Set authenticated callback to subscribe to symbol
             def on_authenticated():
@@ -137,6 +141,11 @@ class StreamClient:
             # Keep the main thread alive
             while self.running and self.websocket_manager._should_run:
                 time.sleep(1)
+                
+            # If we exit the loop, ensure clean shutdown
+            if not self.running and self.shutdown_handler:
+                self.logger.info("Main loop exited, waiting for shutdown to complete")
+                self.shutdown_handler.wait_for_shutdown(timeout=5)
             
         except ValueError as e:
             print(f"Configuration error: {e}")
@@ -150,16 +159,8 @@ class StreamClient:
                 print(f"Critical error: {e}")
             sys.exit(1)
         finally:
-            # Display price summary before exiting
-            if self.data_processor:
-                self.data_processor.display_summary()
-            
-            # Display error summary
-            if self.websocket_manager and self.websocket_manager.error_handler:
-                error_summary = self.websocket_manager.error_handler.get_error_summary()
-                if error_summary["total_errors"] > 0:
-                    self.logger.info(f"Error Summary: {error_summary}")
-            
+            # The shutdown handler will take care of cleanup
+            # This block is for unexpected exits
             if self.logger:
                 self.logger.info("TraderMade Streaming Client stopped")
 
