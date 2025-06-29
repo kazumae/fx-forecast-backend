@@ -2,17 +2,26 @@
 Data Processor for TraderMade Stream Display
 """
 import logging
+from collections import deque
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 
 class DataProcessor:
     """Process and display price data to console"""
     
-    def __init__(self):
-        """Initialize data processor"""
+    def __init__(self, max_buffer_size: int = 1000):
+        """Initialize data processor
+        
+        Args:
+            max_buffer_size: Maximum size of price data buffer
+        """
         self.logger = logging.getLogger(__name__)
         self.last_price = {}  # Store last price for each symbol
+        
+        # メモリ効率的なバッファ（古いデータは自動削除）
+        self.max_buffer_size = max_buffer_size
+        self.price_buffer = deque(maxlen=max_buffer_size)
         
     def process_price_data(self, data: dict):
         """Process price data and display to console
@@ -73,6 +82,15 @@ class DataProcessor:
             # Store current price
             self.last_price[symbol] = {"bid": bid, "ask": ask}
             
+            # Store essential data in buffer (メモリ効率化)
+            essential_data = {
+                'timestamp': timestamp,
+                'symbol': symbol,
+                'bid': bid,
+                'ask': ask
+            }
+            self.price_buffer.append(essential_data)
+            
             # Display to console
             print(output)
             
@@ -97,3 +115,29 @@ class DataProcessor:
             print(f"{symbol:10} Bid: {prices['bid']:12.4f}  Ask: {prices['ask']:12.4f}  Spread: {spread:8.4f}")
         
         print("=" * 70)
+    
+    def get_buffer_statistics(self) -> Dict:
+        """バッファの統計情報を取得
+        
+        Returns:
+            dict: 統計情報
+        """
+        if not self.price_buffer:
+            return {
+                'buffer_size': 0,
+                'oldest_timestamp': None,
+                'newest_timestamp': None
+            }
+        
+        timestamps = [d['timestamp'] for d in self.price_buffer]
+        return {
+            'buffer_size': len(self.price_buffer),
+            'oldest_timestamp': min(timestamps),
+            'newest_timestamp': max(timestamps),
+            'max_buffer_size': self.max_buffer_size
+        }
+    
+    def clear_buffer(self) -> None:
+        """バッファをクリア（メモリ解放）"""
+        self.price_buffer.clear()
+        self.logger.info("Price buffer cleared")

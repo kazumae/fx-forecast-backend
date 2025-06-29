@@ -16,6 +16,7 @@ from .data_processor import DataProcessor
 from .logging_utils import SensitiveDataFilter
 from .graceful_shutdown import GracefulShutdownHandler
 from .metrics_collector import MetricsCollector, MetricsReporter
+from .resource_manager import ResourceManager, LongRunningOptimizations
 
 
 class StreamClient:
@@ -106,6 +107,9 @@ class StreamClient:
             # Setup logging
             self.setup_logging(self.config)
             
+            # Setup long-running optimizations
+            LongRunningOptimizations.setup_optimizations()
+            
             # Log startup information
             self.logger.info("=" * 50)
             self.logger.info("TraderMade Streaming Client Starting")
@@ -122,6 +126,14 @@ class StreamClient:
             # Create metrics collector and reporter
             self.metrics_collector = MetricsCollector()
             self.metrics_reporter = MetricsReporter(self.metrics_collector)
+            
+            # Create resource manager
+            self.resource_manager = ResourceManager()
+            
+            # Register components as managed resources
+            self.resource_manager.register_resource('websocket_manager', self.websocket_manager)
+            self.resource_manager.register_resource('data_processor', self.data_processor)
+            self.resource_manager.register_resource('metrics_collector', self.metrics_collector)
             
             # Setup signal handlers (after creating managers)
             self.setup_signal_handlers()
@@ -149,6 +161,9 @@ class StreamClient:
             # Start metrics reporting
             self.metrics_reporter.start_reporting()
             
+            # Start resource management
+            self.resource_manager.start_gc_cycle(interval=3600)  # 1時間ごと
+            
             # Keep the main thread alive
             while self.running and self.websocket_manager._should_run:
                 time.sleep(1)
@@ -173,6 +188,10 @@ class StreamClient:
             # Stop metrics reporting
             if hasattr(self, 'metrics_reporter') and self.metrics_reporter:
                 self.metrics_reporter.stop_reporting()
+            
+            # Stop resource management
+            if hasattr(self, 'resource_manager') and self.resource_manager:
+                self.resource_manager.stop_gc_cycle()
             
             # The shutdown handler will take care of cleanup
             # This block is for unexpected exits
