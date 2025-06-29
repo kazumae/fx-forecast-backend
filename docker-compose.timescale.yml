@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  # TimescaleDB データベース
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: fx-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fx_trading
+      POSTGRES_USER: fx_user
+      POSTGRES_PASSWORD: fx_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5433:5432"  # ホストの5433番ポートにマッピング
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - fx-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fx_user -d fx_trading"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis キャッシュ
+  redis:
+    image: redis:7-alpine
+    container_name: fx-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"  # ホストの6380番ポートにマッピング
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - fx-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Commander (Redis管理UI)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: fx-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - fx-network
+    depends_on:
+      - redis
+
+  # pgAdmin (PostgreSQL管理UI)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: fx-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - fx-network
+    depends_on:
+      - timescaledb
+
+volumes:
+  timescale_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  fx-network:
+    driver: bridge

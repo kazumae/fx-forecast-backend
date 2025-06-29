@@ -5,6 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 FastAPI and PostgreSQL-based foreign exchange (FX) prediction backend API. Provides RESTful APIs for currency rate management, predictions, and batch processing with Slack integration.
 
+## Git Repository Structure
+**IMPORTANT**: This project uses separate Git repositories for different components:
+- `backend/` - Backend API repository (git@github.com:kazumae/fx-forecast-backend.git)
+- `docs/` - Documentation repository (separate Git repository)
+- The root directory (`fx-forcast-02/`) is NOT under Git version control
+- Each subdirectory maintains its own Git repository and history
+- When making changes, ensure you are in the correct directory before running Git commands
+
 ## Essential Commands
 
 ### Development

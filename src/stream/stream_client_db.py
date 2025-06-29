@@ -1,0 +1,245 @@
+"""
+TraderMade Real-time Streaming Client with Database Support
+"""
+import logging
+import logging.handlers
+import os
+import signal
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+from .config import StreamConfig
+from .websocket_manager import WebSocketManager
+from .data_processor_db import DataProcessorDB
+from .logging_utils import SensitiveDataFilter
+from .graceful_shutdown import GracefulShutdownHandler
+from .metrics_collector import MetricsCollector, MetricsReporter
+from .resource_manager import ResourceManager, LongRunningOptimizations
+
+
+class StreamClientDB:
+    """Enhanced streaming client with database support"""
+    
+    def __init__(self):
+        """Initialize streaming client"""
+        self.config = None
+        self.websocket_manager = None
+        self.data_processor = None
+        self.logger = None
+        self.shutdown_handler = None
+        self.running = True
+        
+    def setup_logging(self, config: StreamConfig):
+        """Setup logging configuration"""
+        # Create logs directory if it doesn't exist
+        log_dir = Path(config.log_file_path)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Setup logger
+        logger = logging.getLogger()
+        logger.setLevel(getattr(logging, config.log_level.upper()))
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(getattr(logging, config.log_level.upper()))
+        console_formatter = logging.Formatter(
+            '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        console_handler.setFormatter(console_formatter)
+        
+        # File handler with rotation
+        log_file = log_dir / f'stream_client_db_{datetime.now().strftime("%Y%m%d")}.log'
+        file_handler = logging.handlers.TimedRotatingFileHandler(
+            log_file,
+            when='midnight',
+            interval=1,
+            backupCount=30,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter(
+            '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s'
+        )
+        file_handler.setFormatter(file_formatter)
+        
+        # Add handlers
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+        
+        # Add sensitive data filter
+        sensitive_patterns = []
+        if hasattr(config, 'api_key') and config.api_key:
+            sensitive_patterns.append(config.api_key)
+        
+        sensitive_filter = SensitiveDataFilter(sensitive_patterns)
+        for handler in logger.handlers:
+            handler.addFilter(sensitive_filter)
+        
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("Logging setup complete with sensitive data filtering")
+    
+    def setup_signal_handlers(self):
+        """Setup signal handlers for graceful shutdown"""
+        # Create graceful shutdown handler
+        self.shutdown_handler = GracefulShutdownHandler(
+            websocket_manager=self.websocket_manager,
+            data_processor=self.data_processor,
+            timeout=10
+        )
+        self.shutdown_handler.setup_signal_handlers()
+        
+        # Set running flag to False when shutdown is initiated
+        def on_shutdown():
+            self.running = False
+        
+        # This will be called from the shutdown handler thread
+        self._on_shutdown = on_shutdown
+    
+    def run(self):
+        """Run the streaming client with database support"""
+        try:
+            # Load configuration
+            self.config = StreamConfig.from_env()
+            
+            # Setup logging
+            self.setup_logging(self.config)
+            
+            # Setup long-running optimizations
+            LongRunningOptimizations.setup_optimizations()
+            
+            # Log startup information
+            self.logger.info("=" * 50)
+            self.logger.info("TraderMade Streaming Client with DB Support Starting")
+            self.logger.info(f"Target Symbol: {self.config.target_symbol}")
+            self.logger.info(f"WebSocket URL: {self.config.websocket_url}")
+            self.logger.info(f"Database URL: postgresql://***@localhost:5433/fx_trading")
+            self.logger.info(f"Redis URL: redis://localhost:6380")
+            self.logger.info("=" * 50)
+            
+            # Get Redis URL from environment
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6380")
+            
+            # Create enhanced data processor with DB support
+            self.data_processor = DataProcessorDB(redis_url=redis_url)
+            
+            # Create WebSocket manager
+            self.websocket_manager = WebSocketManager(self.config)
+            
+            # Create metrics collector and reporter
+            self.metrics_collector = MetricsCollector()
+            self.metrics_reporter = MetricsReporter(self.metrics_collector)
+            
+            # Create resource manager
+            self.resource_manager = ResourceManager()
+            
+            # Register components as managed resources
+            self.resource_manager.register_resource('websocket_manager', self.websocket_manager)
+            self.resource_manager.register_resource('data_processor', self.data_processor)
+            self.resource_manager.register_resource('metrics_collector', self.metrics_collector)
+            
+            # Setup signal handlers (after creating managers)
+            self.setup_signal_handlers()
+            
+            # Handle multiple symbols
+            symbols = self._get_target_symbols()
+            
+            # Set authenticated callback to subscribe to symbols
+            def on_authenticated():
+                self.logger.info(f"Authentication successful, subscribing to symbols: {symbols}")
+                for symbol in symbols:
+                    self.websocket_manager.subscribe_to_symbol(symbol)
+                    time.sleep(0.1)  # Small delay between subscriptions
+            
+            self.websocket_manager.on_authenticated = on_authenticated
+            
+            # Set price data callback to use enhanced data processor
+            def on_price_data(price_info: dict):
+                self.data_processor.process_price_data(price_info)
+                # Record metrics
+                if 'timestamp' in price_info:
+                    self.metrics_collector.record_message_received(price_info['timestamp'])
+            
+            self.websocket_manager.on_price_data = on_price_data
+            
+            # Connect to WebSocket
+            self.logger.info("Initiating WebSocket connection...")
+            self.websocket_manager.connect()
+            
+            # Start metrics reporting
+            self.metrics_reporter.start_reporting()
+            
+            # Start resource management
+            self.resource_manager.start_gc_cycle(interval=3600)  # Every hour
+            
+            # Keep the main thread alive
+            while self.running and self.websocket_manager._should_run:
+                time.sleep(1)
+                
+            # If we exit the loop, ensure clean shutdown
+            if not self.running and self.shutdown_handler:
+                self.logger.info("Main loop exited, waiting for shutdown to complete")
+                self.shutdown_handler.wait_for_shutdown(timeout=5)
+            
+        except ValueError as e:
+            print(f"Configuration error: {e}")
+            sys.exit(1)
+        except KeyboardInterrupt:
+            self.logger.info("Keyboard interrupt received")
+        except Exception as e:
+            if self.logger:
+                self.logger.critical(f"Unexpected error: {e}", exc_info=True)
+            else:
+                print(f"Critical error: {e}")
+            sys.exit(1)
+        finally:
+            # Stop metrics reporting
+            if hasattr(self, 'metrics_reporter') and self.metrics_reporter:
+                self.metrics_reporter.stop_reporting()
+            
+            # Stop resource management
+            if hasattr(self, 'resource_manager') and self.resource_manager:
+                self.resource_manager.stop_gc_cycle()
+            
+            # Close data processor (DB and Redis connections)
+            if hasattr(self, 'data_processor') and self.data_processor:
+                self.data_processor.close()
+            
+            # The shutdown handler will take care of cleanup
+            # This block is for unexpected exits
+            if self.logger:
+                self.logger.info("TraderMade Streaming Client with DB Support stopped")
+    
+    def _get_target_symbols(self) -> list:
+        """Get target symbols from configuration
+        
+        Returns:
+            List of symbols to subscribe to
+        """
+        # Check if multiple symbols are configured
+        symbols_str = os.getenv("TARGET_SYMBOLS", self.config.target_symbol)
+        
+        # Parse comma-separated symbols
+        symbols = [s.strip() for s in symbols_str.split(",") if s.strip()]
+        
+        # Remove duplicates while preserving order
+        unique_symbols = []
+        seen = set()
+        for symbol in symbols:
+            if symbol not in seen:
+                seen.add(symbol)
+                unique_symbols.append(symbol)
+        
+        return unique_symbols if unique_symbols else [self.config.target_symbol]
+
+
+def main():
+    """Main entry point"""
+    client = StreamClientDB()
+    client.run()
+
+
+if __name__ == "__main__":
+    main()
