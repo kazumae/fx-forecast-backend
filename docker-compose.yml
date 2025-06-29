@@ -69,7 +69,7 @@ services:
     networks:
       - fx-network
     restart: unless-stopped
-    command: python src/stream/stream_client.py
+    command: python -m src.stream.stream_client
 
 volumes:
   postgres_data:
