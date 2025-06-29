@@ -144,6 +144,12 @@ class StreamClient:
             if self.data_processor:
                 self.data_processor.display_summary()
             
+            # Display error summary
+            if self.websocket_manager and self.websocket_manager.error_handler:
+                error_summary = self.websocket_manager.error_handler.get_error_summary()
+                if error_summary["total_errors"] > 0:
+                    self.logger.info(f"Error Summary: {error_summary}")
+            
             if self.logger:
                 self.logger.info("TraderMade Streaming Client stopped")
 

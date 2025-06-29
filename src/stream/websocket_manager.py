@@ -13,6 +13,8 @@ from enum import Enum
 import websocket
 
 from .config import StreamConfig
+from .error_handler import ErrorHandler, ErrorType
+from .slack_error_notifier import SlackErrorNotifier
 
 
 class ConnectionState(Enum):
@@ -55,6 +57,20 @@ class WebSocketManager:
         self._should_run = True
         self._reconnect_count = 0
         self._reconnect_thread: Optional[threading.Thread] = None
+        
+        # Error handling with Slack notifications
+        slack_notifier = None
+        if hasattr(config, 'slack_error_notification_enabled') and config.slack_error_notification_enabled:
+            slack_cooldown = getattr(config, 'slack_error_notification_cooldown', 300)
+            slack_notifier = SlackErrorNotifier(notification_cooldown=slack_cooldown)
+        else:
+            # Check environment variable
+            import os
+            if os.getenv('SLACK_ERROR_NOTIFICATION_ENABLED', '').lower() == 'true':
+                slack_cooldown = int(os.getenv('SLACK_ERROR_NOTIFICATION_COOLDOWN', '300'))
+                slack_notifier = SlackErrorNotifier(notification_cooldown=slack_cooldown)
+        
+        self.error_handler = ErrorHandler(slack_notifier=slack_notifier)
     
     @property
     def state(self) -> ConnectionState:
@@ -132,8 +148,12 @@ class WebSocketManager:
             )
             
         except Exception as e:
-            self.logger.error(f"WebSocket error: {e}")
-            self.state = ConnectionState.ERROR
+            error_info = self.error_handler.handle_error(e, "WebSocket connection")
+            if error_info["action"] == "terminate":
+                self.state = ConnectionState.ERROR
+                self._should_run = False
+            else:
+                self.state = ConnectionState.DISCONNECTED
         finally:
             self.logger.debug("WebSocket thread ended")
     
@@ -174,6 +194,7 @@ class WebSocketManager:
             if self.is_connected:
                 self.logger.info("Reconnection successful")
                 self._reconnect_count = 0
+                self.error_handler.reset_error_counts()  # Reset error counts on successful connection
                 self._restore_subscriptions()
                 break
     
@@ -218,7 +239,7 @@ class WebSocketManager:
             self.logger.info("Authentication message sent")
             self.logger.debug(f"Auth message: userKey=***{self.config.api_key[-4:]}")
         except Exception as e:
-            self.logger.error(f"Failed to send authentication message: {e}")
+            self.error_handler.handle_error(e, "Authentication send")
             self.close()
     
     def _on_message(self, ws, message):
@@ -253,8 +274,10 @@ class WebSocketManager:
                         if self.on_authenticated:
                             self.on_authenticated()
                     else:
-                        self.logger.error(f"Authentication failed: {data.get('message', 'Unknown error')}")
+                        auth_error = Exception(f"Authentication failed: {data.get('message', 'Unknown error')}")
+                        self.error_handler.handle_error(auth_error, "Authentication response", ErrorType.AUTH_ERROR)
                         self.state = ConnectionState.ERROR
+                        self._should_run = False
                         self.close()
                         return
                 
@@ -277,20 +300,23 @@ class WebSocketManager:
                     if "subscription" in str(data).lower() or symbol in self.subscribed_symbols:
                         self.logger.info("Possible subscription response detected")
                 
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # Log non-JSON messages that aren't "Connected"
-                self.logger.warning(f"Non-JSON message received: {repr(message)}")
+                self.error_handler.handle_error(e, f"JSON decode error: {repr(message)}", ErrorType.DATA_ERROR)
                 
         except Exception as e:
-            self.logger.error(f"Error processing message: {e}", exc_info=True)
+            self.error_handler.handle_error(e, "Message processing")
     
     def _on_error(self, ws, error):
         """Handle WebSocket errors"""
-        self.logger.error(f"WebSocket error: {error}")
+        error_info = self.error_handler.handle_error(error, "WebSocket event")
         
-        # Check for authentication errors
-        if "401" in str(error) or "unauthorized" in str(error).lower():
-            self.logger.critical("Authentication error - please check your API key")
+        # Take action based on error handler recommendation
+        if error_info["action"] == "terminate":
+            self._should_run = False
+            self.state = ConnectionState.ERROR
+        elif error_info["action"] == "reconnect" and self._should_run:
+            self.state = ConnectionState.DISCONNECTED
     
     def _on_close(self, ws, close_status_code, close_msg):
         """Handle connection close event"""
@@ -382,7 +408,7 @@ class WebSocketManager:
             self.ws.send(json.dumps(subscribe_message))
             self.logger.info(f"Subscription request sent for {symbol}")
         except Exception as e:
-            self.logger.error(f"Failed to subscribe to {symbol}: {e}")
+            self.error_handler.handle_error(e, f"Subscribe to {symbol}")
             with self._symbols_lock:
                 self.subscribed_symbols.discard(symbol)
     
@@ -432,4 +458,4 @@ class WebSocketManager:
                 self.on_price_data(price_info)
                 
         except Exception as e:
-            self.logger.error(f"Error processing price data: {e}", exc_info=True)
+            self.error_handler.handle_error(e, "Price data processing", ErrorType.DATA_ERROR)
