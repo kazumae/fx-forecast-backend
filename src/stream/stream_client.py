@@ -15,6 +15,7 @@ from .websocket_manager import WebSocketManager
 from .data_processor import DataProcessor
 from .logging_utils import SensitiveDataFilter
 from .graceful_shutdown import GracefulShutdownHandler
+from .metrics_collector import MetricsCollector, MetricsReporter
 
 
 class StreamClient:
@@ -118,6 +119,10 @@ class StreamClient:
             # Create data processor
             self.data_processor = DataProcessor()
             
+            # Create metrics collector and reporter
+            self.metrics_collector = MetricsCollector()
+            self.metrics_reporter = MetricsReporter(self.metrics_collector)
+            
             # Setup signal handlers (after creating managers)
             self.setup_signal_handlers()
             
@@ -131,12 +136,18 @@ class StreamClient:
             # Set price data callback to use data processor
             def on_price_data(price_info: dict):
                 self.data_processor.process_price_data(price_info)
+                # メトリクス記録
+                if 'timestamp' in price_info:
+                    self.metrics_collector.record_message_received(price_info['timestamp'])
             
             self.websocket_manager.on_price_data = on_price_data
             
             # Connect to WebSocket
             self.logger.info("Initiating WebSocket connection...")
             self.websocket_manager.connect()
+            
+            # Start metrics reporting
+            self.metrics_reporter.start_reporting()
             
             # Keep the main thread alive
             while self.running and self.websocket_manager._should_run:
@@ -159,6 +170,10 @@ class StreamClient:
                 print(f"Critical error: {e}")
             sys.exit(1)
         finally:
+            # Stop metrics reporting
+            if hasattr(self, 'metrics_reporter') and self.metrics_reporter:
+                self.metrics_reporter.stop_reporting()
+            
             # The shutdown handler will take care of cleanup
             # This block is for unexpected exits
             if self.logger:

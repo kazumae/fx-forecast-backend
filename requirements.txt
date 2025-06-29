@@ -38,3 +38,6 @@ pydantic-settings==2.1.0
 
 # WebSocket client for TraderMade streaming
 websocket-client==1.7.0
+
+# System monitoring
+psutil==5.9.6
