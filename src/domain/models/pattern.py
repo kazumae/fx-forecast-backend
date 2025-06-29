@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 
 
 class PatternType(str, Enum):
@@ -43,3 +43,11 @@ class PatternSignal:
     def description(self) -> str:
         """Get human-readable description"""
         return f"{self.pattern_type.value} @ {self.price_level} ({self.confidence:.1f}% confidence)"
+
+
+class PatternStrength(Enum):
+    """パターン強度"""
+    WEAK = "weak"
+    MODERATE = "moderate"
+    STRONG = "strong"
+    VERY_STRONG = "very_strong"

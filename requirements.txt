@@ -41,3 +41,9 @@ websocket-client==1.7.0
 
 # System monitoring
 psutil==5.9.6
+
+# Visualization
+matplotlib==3.8.2
+
+# Test coverage
+pytest-cov==4.1.0
