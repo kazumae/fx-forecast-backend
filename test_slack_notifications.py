@@ -7,7 +7,6 @@ import sys
 import time
 
 # Add the src directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.stream.slack_error_notifier import SlackErrorNotifier

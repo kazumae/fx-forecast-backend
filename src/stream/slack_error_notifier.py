@@ -3,15 +3,12 @@ Slack Error Notifier for TraderMade Streaming
 """
 import time
 import logging
+import json
+import urllib.request
 from datetime import datetime
 from typing import Dict, Optional
 from enum import Enum
-
-# Import the existing SlackNotifier
-import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from src.batch.utils.slack_notifier import SlackNotifier
 
 
 class SlackErrorNotifier:
@@ -24,18 +21,34 @@ class SlackErrorNotifier:
         Args:
             notification_cooldown: Cooldown period in seconds between notifications of same type
         """
-        self.slack = SlackNotifier()
+        self.webhook_url = os.getenv('SLACK_WEBHOOK_URL')
         self.last_notification: Dict[str, float] = {}
         self.notification_cooldown = notification_cooldown
         self.logger = logging.getLogger(__name__)
         
         # Check if Slack is configured
-        if not self.slack.webhook_url:
+        if not self.webhook_url:
             self.logger.warning("Slack webhook URL not configured - notifications disabled")
             self.enabled = False
         else:
             self.enabled = True
             self.logger.info(f"Slack error notifications enabled (cooldown: {notification_cooldown}s)")
+    
+    def _send_webhook_message(self, payload: dict) -> bool:
+        """Send message via webhook"""
+        try:
+            req = urllib.request.Request(
+                self.webhook_url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            with urllib.request.urlopen(req) as response:
+                return response.status == 200
+                
+        except Exception as e:
+            self.logger.error(f"Failed to send Slack webhook message: {e}")
+            return False
     
     def notify_error(self, error_type: str, error_message: str, 
                     severity: str = "ERROR", details: Optional[Dict] = None) -> bool:
@@ -98,14 +111,24 @@ class SlackErrorNotifier:
                         "short": False
                     })
             
+            # Build payload
+            text = f"{emoji} TraderMade Streaming Alert"
+            attachments = [{
+                "color": color,
+                "title": "TraderMade Streaming Alert",
+                "text": error_message,
+                "fields": fields,
+                "footer": "FX Forecast System",
+                "ts": int(time.time())
+            }]
+            
+            payload = {
+                "text": text,
+                "attachments": attachments
+            }
+            
             # Send notification
-            success = self.slack.send_custom_notification(
-                title=f"{emoji} TraderMade Streaming Alert",
-                message=error_message,
-                color=color,
-                fields=fields,
-                emoji=emoji
-            )
+            success = self._send_webhook_message(payload)
             
             if success:
                 self.last_notification[error_type] = time.time()
