@@ -54,11 +54,21 @@ docker-compose exec app python run_batch.py slack_notification --notification-ty
 
 ### Testing
 ```bash
-# Manual API testing
-./test_api.sh
+# Run all tests
+bash scripts/test.sh
 
-# Run tests (when implemented)
-docker-compose exec app pytest
+# Run unit tests only
+bash scripts/test_unit.sh
+
+# Run integration tests (requires Docker)
+bash scripts/test_integration.sh
+
+# Run E2E tests (requires all services)
+bash tests/e2e/test_api_endpoints.sh
+
+# Run specific test
+python tests/unit/core/test_tradermade_config.py
+docker-compose exec tradermade-stream python tests/integration/test_slack_notifications.py
 ```
 
 ## Architecture
@@ -70,7 +80,10 @@ docker-compose exec app pytest
 - `backend/src/models/` - SQLAlchemy database models
 - `backend/src/schemas/` - Pydantic schemas for request/response validation
 - `backend/src/services/` - Business logic layer
+- `backend/src/stream/` - TraderMade WebSocket streaming
 - `backend/alembic/` - Database migration scripts
+- `backend/tests/` - Organized test suite (unit, integration, e2e, manual)
+- `backend/scripts/` - Development and test runner scripts
 
 ### Key Design Patterns
 1. **Layered Architecture**: Clear separation between API endpoints, services, and data models

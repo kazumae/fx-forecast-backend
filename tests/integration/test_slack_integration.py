@@ -3,10 +3,14 @@
 Slack通知統合のテストスクリプト
 
 使用方法:
-    docker-compose exec app python test_slack_integration.py
+    docker-compose exec app python tests/integration/test_slack_integration.py
 """
 
+import os
 import sys
+# Add backend directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 import logging
 from src.batch.jobs.fetch_forex_rates import FetchForexRatesBatch
 from src.batch.jobs.example_notification import ExampleNotificationBatch

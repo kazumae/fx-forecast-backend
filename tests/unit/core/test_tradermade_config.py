@@ -3,9 +3,10 @@
 
 import os
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+# Add backend directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 
-from core.tradermade_config import TraderMadeConfig
+from src.core.tradermade_config import TraderMadeConfig
 
 def test_without_api_key():
     """APIキーなしでエラーになることを確認"""
