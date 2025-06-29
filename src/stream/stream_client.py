@@ -41,7 +41,7 @@ class StreamClient:
         
         # Console handler
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(getattr(logging, config.log_level.upper()))
         console_formatter = logging.Formatter(
             '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'

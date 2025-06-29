@@ -15,6 +15,7 @@ import websocket
 from .config import StreamConfig
 from .error_handler import ErrorHandler, ErrorType
 from .slack_error_notifier import SlackErrorNotifier
+from .heartbeat_manager import HeartbeatManager
 
 
 class ConnectionState(Enum):
@@ -71,6 +72,9 @@ class WebSocketManager:
                 slack_notifier = SlackErrorNotifier(notification_cooldown=slack_cooldown)
         
         self.error_handler = ErrorHandler(slack_notifier=slack_notifier)
+        
+        # Initialize HeartbeatManager
+        self.heartbeat_manager = HeartbeatManager(self, config)
     
     @property
     def state(self) -> ConnectionState:
@@ -141,10 +145,15 @@ class WebSocketManager:
             }
             
             # Run with timeout
+            # Note: ping_timeout must be less than ping_interval
+            ping_interval = self.config.heartbeat_interval
+            ping_timeout = min(ping_interval - 5, ping_interval * 0.8)
+            ping_timeout = max(ping_timeout, 5)  # At least 5 seconds
+            
             self.ws.run_forever(
                 sslopt=sslopt,
-                ping_interval=self.config.heartbeat_interval,
-                ping_timeout=10
+                ping_interval=ping_interval,
+                ping_timeout=ping_timeout
             )
             
         except Exception as e:
@@ -224,6 +233,9 @@ class WebSocketManager:
         self.state = ConnectionState.CONNECTED
         self.logger.info("WebSocket connection established")
         
+        # Reset heartbeat activity time on new connection
+        self.heartbeat_manager.reset_activity_time()
+        
         # Send authentication message
         self._authenticate()
     
@@ -249,6 +261,9 @@ class WebSocketManager:
             if not message or not message.strip():
                 return
             
+            # Update heartbeat activity on any message
+            self.heartbeat_manager.update_activity()
+            
             # Log raw message for debugging
             self.logger.debug(f"Raw message received: {repr(message)}")
             
@@ -256,6 +271,10 @@ class WebSocketManager:
             if message.strip() == "Connected":
                 self.state = ConnectionState.AUTHENTICATED
                 self.logger.info("Authentication successful - Connected to TraderMade")
+                
+                # Start heartbeat after authentication
+                self.heartbeat_manager.start_heartbeat()
+                
                 if self.on_authenticated:
                     self.on_authenticated()
                 return
@@ -269,6 +288,9 @@ class WebSocketManager:
                     if data.get("success"):
                         self.state = ConnectionState.AUTHENTICATED
                         self.logger.info("Authentication successful")
+                        
+                        # Start heartbeat after authentication
+                        self.heartbeat_manager.start_heartbeat()
                         
                         # Trigger authenticated callback
                         if self.on_authenticated:
@@ -338,6 +360,8 @@ class WebSocketManager:
     def _on_pong(self, ws, message):
         """Handle pong message"""
         self.logger.debug("Pong received")
+        # Notify heartbeat manager
+        self.heartbeat_manager.on_pong(ws, message)
     
     def send(self, message: dict):
         """Send message through WebSocket
@@ -363,6 +387,9 @@ class WebSocketManager:
         """Close WebSocket connection"""
         self.logger.info("Closing WebSocket connection")
         self._should_run = False
+        
+        # Stop heartbeat
+        self.heartbeat_manager.stop_heartbeat()
         
         # Close WebSocket if exists
         if self.ws:
@@ -459,3 +486,28 @@ class WebSocketManager:
                 
         except Exception as e:
             self.error_handler.handle_error(e, "Price data processing", ErrorType.DATA_ERROR)
+    
+    def reconnect(self):
+        """Reconnect WebSocket connection"""
+        if self.state == ConnectionState.RECONNECTING:
+            self.logger.debug("Already reconnecting, skipping")
+            return
+            
+        self.logger.info("Initiating reconnection")
+        self.state = ConnectionState.RECONNECTING
+        
+        # Stop heartbeat before reconnecting
+        self.heartbeat_manager.stop_heartbeat()
+        
+        # Close current connection
+        if self.ws:
+            try:
+                self.ws.close()
+            except Exception as e:
+                self.logger.debug(f"Error closing WebSocket during reconnect: {e}")
+        
+        # Reset connection state
+        self.state = ConnectionState.DISCONNECTED
+        
+        # Trigger reconnection via the reconnection thread
+        self._start_reconnection()
