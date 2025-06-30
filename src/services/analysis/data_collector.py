@@ -25,33 +25,19 @@ class AnalysisDataCollector:
     async def collect_all_data(self, symbol: str = "XAUUSD") -> Dict[str, Any]:
         """全データを収集"""
         try:
-            # 並列でデータ収集
-            market_data_task = self.collect_market_data(symbol)
-            candlestick_task = self.collect_candlestick_data(symbol)
-            indicators_task = self.collect_technical_indicators(symbol)
-            signals_task = self.collect_signal_history(symbol)
-            
-            # 全タスクを同時実行
-            results = await asyncio.gather(
-                market_data_task,
-                candlestick_task,
-                indicators_task,
-                signals_task,
-                return_exceptions=True
-            )
-            
-            # エラーチェック
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"Data collection error in task {i}: {result}")
+            # 順次実行（concurrency issues を避けるため）
+            market_data = await self.collect_market_data(symbol)
+            candlestick_data = await self.collect_candlestick_data(symbol)
+            indicators_data = await self.collect_technical_indicators(symbol)
+            signals_data = await self.collect_signal_history(symbol)
                     
             return {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "symbol": symbol,
-                "market_data": results[0] if not isinstance(results[0], Exception) else {},
-                "candlesticks": results[1] if not isinstance(results[1], Exception) else {},
-                "indicators": results[2] if not isinstance(results[2], Exception) else {},
-                "signals": results[3] if not isinstance(results[3], Exception) else []
+                "market_data": market_data,
+                "candlesticks": candlestick_data,
+                "indicators": indicators_data,
+                "signals": signals_data
             }
             
         except Exception as e:
@@ -92,7 +78,7 @@ class AnalysisDataCollector:
             stats_result = await self.db.execute(stats_query)
             stats = stats_result.one()
             
-            # 24時間前の価格
+            # 24時間前の価格（データがない場合は最も古いデータを使用）
             ago_price_query = select(ForexRate).where(
                 and_(
                     ForexRate.currency_pair == symbol,
@@ -103,11 +89,26 @@ class AnalysisDataCollector:
             ago_result = await self.db.execute(ago_price_query)
             ago_rate = ago_result.scalar_one_or_none()
             
-            current_mid = (current_rate.bid + current_rate.ask) / 2
-            ago_mid = (ago_rate.bid + ago_rate.ask) / 2 if ago_rate else current_mid
-            change_24h = ((current_mid - ago_mid) / ago_mid) * 100 if ago_mid else 0
+            # 24時間前のデータがない場合は、最も古いデータを取得
+            if not ago_rate:
+                oldest_query = select(ForexRate).where(
+                    ForexRate.currency_pair == symbol
+                ).order_by(ForexRate.timestamp.asc()).limit(1)
+                
+                oldest_result = await self.db.execute(oldest_query)
+                ago_rate = oldest_result.scalar_one_or_none()
             
-            volatility = float(stats.stddev_bid) / float(stats.avg_bid) if stats.avg_bid else 0
+            current_mid = (current_rate.bid + current_rate.ask) / 2
+            
+            if ago_rate:
+                ago_mid = (ago_rate.bid + ago_rate.ask) / 2
+                change_24h = ((current_mid - ago_mid) / ago_mid) * 100 if ago_mid else 0
+            else:
+                # データが全くない場合のフォールバック
+                ago_mid = current_mid
+                change_24h = 0
+            
+            volatility = float(stats.stddev_bid) / float(stats.avg_bid) if stats.avg_bid and stats.stddev_bid else 0
             
             return {
                 "current_price": current_mid,

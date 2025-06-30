@@ -79,9 +79,32 @@ def upgrade() -> None:
     )
     op.create_index('idx_technical_indicators_symbol_timeframe_timestamp', 'technical_indicators', ['symbol', 'timeframe', 'timestamp'], unique=False)
     op.create_index(op.f('ix_technical_indicators_id'), 'technical_indicators', ['id'], unique=False)
+    
+    # Create entry_signals table
+    op.create_table('entry_signals',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('symbol', sa.String(length=10), nullable=False),
+        sa.Column('timeframe', sa.String(length=5), nullable=False),
+        sa.Column('signal_type', sa.String(length=10), nullable=False),
+        sa.Column('pattern_type', sa.String(length=50), nullable=True),
+        sa.Column('entry_price', sa.Float(), nullable=True),
+        sa.Column('stop_loss', sa.Float(), nullable=True),
+        sa.Column('take_profit', sa.Float(), nullable=True),
+        sa.Column('confidence_score', sa.Float(), nullable=True),
+        sa.Column('status', sa.String(length=20), nullable=True),
+        sa.Column('metadata', sa.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_entry_signals_id'), 'entry_signals', ['id'], unique=False)
+    op.create_index('idx_entry_signals_symbol_timeframe', 'entry_signals', ['symbol', 'timeframe'], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_index('idx_entry_signals_symbol_timeframe', table_name='entry_signals')
+    op.drop_index(op.f('ix_entry_signals_id'), table_name='entry_signals')
+    op.drop_table('entry_signals')
     op.drop_index(op.f('ix_technical_indicators_id'), table_name='technical_indicators')
     op.drop_index('idx_technical_indicators_symbol_timeframe_timestamp', table_name='technical_indicators')
     op.drop_table('technical_indicators')

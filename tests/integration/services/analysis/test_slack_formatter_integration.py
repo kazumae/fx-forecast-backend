@@ -235,7 +235,7 @@ class TestSlackAnalysisFormatterIntegration:
             result = formatter.format_error_notification(error, context)
             
             assert result["channel"] == "#fx-alerts"
-            assert "@here" in result["text"]
+            assert "<!here>" in result["text"]
             assert type(error).__name__ in result["text"]
             
             # エラーメッセージが含まれていることを確認

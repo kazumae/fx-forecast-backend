@@ -24,7 +24,7 @@ class SlackAnalysisFormatter:
         "ALERT": {
             "color": "#ff0000",  # 赤
             "channel": "#fx-alerts",
-            "mention": "@here"
+            "mention": True
         }
     }
     
@@ -62,10 +62,11 @@ class SlackAnalysisFormatter:
         
         # メンション設定
         text_content = f"AI分析: {analysis_result.get('symbol', 'N/A')} - "
-        text_content += analysis_result.get('executive_summary', '')[:100] + "..."
+        text_content += analysis_result.get('executive_summary', '')
         
-        if importance_config["mention"]:
-            text_content = f"{importance_config['mention']} {text_content}"
+        if importance_config.get("mention"):
+            # @here メンションを先頭に追加（Slack形式）
+            text_content = f"<!here> {text_content}"
         
         return {
             "channel": importance_config["channel"],
@@ -323,7 +324,7 @@ class SlackAnalysisFormatter:
         
         return {
             "channel": self.NOTIFICATION_LEVELS["ALERT"]["channel"],
-            "text": f"@here AI分析でエラーが発生しました: {type(error).__name__}",
+            "text": f"<!here> AI分析でエラーが発生しました: {type(error).__name__}",
             "blocks": blocks,
             "attachments": [{
                 "color": self.NOTIFICATION_LEVELS["ALERT"]["color"]

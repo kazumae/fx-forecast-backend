@@ -19,35 +19,37 @@ logger = logging.getLogger(__name__)
 class CandlestickGenerator:
     """ローソク足生成クラス"""
     
-    def __init__(self, db_session: AsyncSession):
-        self.db_session = db_session
+    def __init__(self, session_factory):
+        self.session_factory = session_factory
         self.timeframes = ['1m', '5m', '15m', '1h', '4h', '1d']
         self.current_candles: Dict[str, Dict[str, Optional[CandlestickData]]] = {}
         
     async def process_tick(self, tick_data: Dict) -> None:
         """ティックデータを処理してローソク足を更新"""
-        try:
-            symbol = tick_data['symbol']
-            # Handle timestamp - it might already be in seconds or milliseconds
-            ts = tick_data['timestamp']
-            if isinstance(ts, (int, float)):
-                # If timestamp is greater than year 3000 in seconds, it's probably in milliseconds
-                if ts > 32503680000:  # Jan 1, 3000 in seconds
-                    ts = ts / 1000
-                timestamp = datetime.fromtimestamp(ts, tz=timezone.utc)
-            else:
-                # If it's already a datetime, use it directly
-                timestamp = ts if isinstance(ts, datetime) else datetime.now(timezone.utc)
-            price = Decimal(str(tick_data['mid']))
-            
-            # 各時間枠でローソク足を更新
-            for timeframe in self.timeframes:
-                await self._update_or_create_candle(symbol, timeframe, timestamp, price)
+        async with self.session_factory() as db_session:
+            try:
+                symbol = tick_data['symbol']
+                # Handle timestamp - it might already be in seconds or milliseconds
+                ts = tick_data['timestamp']
+                if isinstance(ts, (int, float)):
+                    # If timestamp is greater than year 3000 in seconds, it's probably in milliseconds
+                    if ts > 32503680000:  # Jan 1, 3000 in seconds
+                        ts = ts / 1000
+                    timestamp = datetime.fromtimestamp(ts, tz=timezone.utc)
+                else:
+                    # If it's already a datetime, use it directly
+                    timestamp = ts if isinstance(ts, datetime) else datetime.now(timezone.utc)
+                price = Decimal(str(tick_data['mid']))
                 
-        except Exception as e:
-            logger.error(f"Error processing tick for candlestick: {e}")
+                # 各時間枠でローソク足を更新
+                for timeframe in self.timeframes:
+                    await self._update_or_create_candle(db_session, symbol, timeframe, timestamp, price)
+                    
+            except Exception as e:
+                logger.error(f"Error processing tick for candlestick: {e}")
+                await db_session.rollback()
             
-    async def _update_or_create_candle(self, symbol: str, timeframe: str, 
+    async def _update_or_create_candle(self, db_session: AsyncSession, symbol: str, timeframe: str, 
                                      timestamp: datetime, price: Decimal) -> None:
         """ローソク足を更新または作成"""
         # 現在のローソク足の開始時間を計算
@@ -74,7 +76,7 @@ class CandlestickGenerator:
                     CandlestickData.open_time == open_time
                 )
             )
-            result = await self.db_session.execute(stmt)
+            result = await db_session.execute(stmt)
             candle = result.scalar_one_or_none()
             
             if candle:
@@ -96,7 +98,7 @@ class CandlestickGenerator:
                     close_price=price,
                     tick_count=1
                 )
-                self.db_session.add(candle)
+                db_session.add(candle)
             
             # キャッシュに保存
             if symbol not in self.current_candles:
@@ -105,7 +107,7 @@ class CandlestickGenerator:
             
         # 定期的にDBに保存
         if candle.tick_count % 10 == 0:  # 10ティックごとに保存
-            await self.db_session.commit()
+            await db_session.commit()
             
     def _get_candle_open_time(self, timestamp: datetime, timeframe: str) -> datetime:
         """ローソク足の開始時間を計算"""
@@ -147,34 +149,39 @@ class CandlestickGenerator:
     async def generate_from_historical_data(self, symbol: str, start_date: datetime, 
                                           end_date: datetime) -> None:
         """履歴データからローソク足を生成"""
-        logger.info(f"Generating candlesticks for {symbol} from {start_date} to {end_date}")
-        
-        # forex_ratesから履歴データを取得
-        stmt = select(ForexRate).where(
-            and_(
-                ForexRate.currency_pair == symbol,
-                ForexRate.timestamp >= start_date,
-                ForexRate.timestamp <= end_date
-            )
-        ).order_by(ForexRate.timestamp)
-        
-        result = await self.db_session.execute(stmt)
-        forex_rates = result.scalars().all()
-        
-        logger.info(f"Found {len(forex_rates)} forex rates to process")
-        
-        # ティックデータとして処理
-        for rate in forex_rates:
-            tick_data = {
-                'symbol': rate.currency_pair,
-                'timestamp': int(rate.timestamp.timestamp() * 1000),
-                'mid': float(rate.rate)  # ForexRateではrateがmid価格
-            }
-            await self.process_tick(tick_data)
-            
-        # 最終的にコミット
-        await self.db_session.commit()
-        logger.info(f"Completed generating candlesticks for {symbol}")
+        async with self.session_factory() as db_session:
+            try:
+                logger.info(f"Generating candlesticks for {symbol} from {start_date} to {end_date}")
+                
+                # forex_ratesから履歴データを取得
+                stmt = select(ForexRate).where(
+                    and_(
+                        ForexRate.currency_pair == symbol,
+                        ForexRate.timestamp >= start_date,
+                        ForexRate.timestamp <= end_date
+                    )
+                ).order_by(ForexRate.timestamp)
+                
+                result = await db_session.execute(stmt)
+                forex_rates = result.scalars().all()
+                
+                logger.info(f"Found {len(forex_rates)} forex rates to process")
+                
+                # ティックデータとして処理
+                for rate in forex_rates:
+                    tick_data = {
+                        'symbol': rate.currency_pair,
+                        'timestamp': int(rate.timestamp.timestamp() * 1000),
+                        'mid': float(rate.rate)  # ForexRateではrateがmid価格
+                    }
+                    await self.process_tick(tick_data)
+                    
+                # 最終的にコミット
+                await db_session.commit()
+                logger.info(f"Completed generating candlesticks for {symbol}")
+            except Exception as e:
+                logger.error(f"Error in generate_from_historical_data: {e}")
+                await db_session.rollback()
         
     async def cleanup_cache(self, older_than_minutes: int = 60) -> None:
         """古いキャッシュをクリーンアップ"""
