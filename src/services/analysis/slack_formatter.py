@@ -280,7 +280,11 @@ class SlackAnalysisFormatter:
                 if "confirmation_signals" in rationale:
                     text += f"• 確認シグナル: {rationale['confirmation_signals']}\n"
                 if "invalidation_level" in rationale:
-                    text += f"• 無効化レベル: ${rationale['invalidation_level']:,.2f}\n"
+                    level = rationale['invalidation_level']
+                    if isinstance(level, (int, float)):
+                        text += f"• 無効化レベル: ${level:,.2f}\n"
+                    else:
+                        text += f"• 無効化レベル: {level}\n"
         
         # EMA分析
         if "ema_analysis" in detailed:
