@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
-from src.models.forex import ForexRate, ForexForecast
+from src.models.forex import ForexRate
 from src.schemas.forex import ForecastRequest
 
 def get_forex_rates(
@@ -34,7 +34,7 @@ def create_forex_rate(db: Session, rate_data: dict) -> ForexRate:
     db.refresh(db_rate)
     return db_rate
 
-def generate_forecast(db: Session, forecast_request: ForecastRequest) -> ForexForecast:
+def generate_forecast(db: Session, forecast_request: ForecastRequest) -> dict:
     # This is a placeholder for actual forecasting logic
     # In production, this would call a machine learning model
     latest_rate = get_latest_rate(db, forecast_request.currency_pair)
@@ -48,18 +48,13 @@ def generate_forecast(db: Session, forecast_request: ForecastRequest) -> ForexFo
     
     forecast_date = datetime.utcnow() + timedelta(days=forecast_request.forecast_horizon)
     
-    db_forecast = ForexForecast(
-        currency_pair=forecast_request.currency_pair,
-        forecast_date=forecast_date,
-        predicted_rate=predicted_rate,
-        confidence_interval={"lower": predicted_rate * 0.98, "upper": predicted_rate * 1.02},
-        model_name=forecast_request.model_type
-    )
-    
-    db.add(db_forecast)
-    db.commit()
-    db.refresh(db_forecast)
-    return db_forecast
+    return {
+        "currency_pair": forecast_request.currency_pair,
+        "forecast_date": forecast_date,
+        "predicted_rate": predicted_rate,
+        "confidence_interval": {"lower": predicted_rate * 0.98, "upper": predicted_rate * 1.02},
+        "model_name": forecast_request.model_type
+    }
 
 def get_currency_analysis(db: Session, currency_pair: str) -> dict:
     # Get rates for different time periods

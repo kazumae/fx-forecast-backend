@@ -4,8 +4,7 @@ from sqlalchemy import func
 
 from src.batch.base import BaseBatchJob
 from src.batch.utils.slack_notifier import SlackNotifier
-from src.models.forex import ForexRate, ForexForecast
-from src.models.user import User
+from src.models.forex import ForexRate
 
 
 class SlackNotificationBatch(BaseBatchJob):

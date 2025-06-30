@@ -1,0 +1,21 @@
+# FXバックエンドシステム定期ジョブ
+# 
+# 形式: 分 時 日 月 曜日 コマンド
+#
+# 環境変数を読み込む
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# 毎日午前2時に古いデータをクリーンアップ（7日分を保持）
+0 2 * * * cd /app && python run_batch.py cleanup_old_data --days 7 >> /var/log/cron/cleanup.log 2>&1
+
+# 毎日午前6時に日次レポートを生成
+0 6 * * * cd /app && python run_batch.py generate_daily_report >> /var/log/cron/daily_report.log 2>&1
+
+# 毎時0分に為替レートデータを取得（必要に応じて）
+# 0 * * * * cd /app && python run_batch.py fetch_forex_rates >> /var/log/cron/fetch_rates.log 2>&1
+
+# 毎朝9時にSlack通知（日次サマリー）
+0 9 * * * cd /app && python run_batch.py slack_notification --notification-type daily_summary >> /var/log/cron/slack.log 2>&1
+
+# 空行（cronには最後に空行が必要）

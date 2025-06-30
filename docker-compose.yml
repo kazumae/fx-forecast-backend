@@ -77,6 +77,26 @@ services:
     restart: unless-stopped
     command: python -m src.stream.stream_client_db
 
+  cron:
+    build:
+      context: .
+      dockerfile: docker/cron/Dockerfile
+    container_name: fx-cron
+    volumes:
+      - .:/app
+      - ./logs/cron:/var/log/cron
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - fx-network
+    restart: unless-stopped
+
 volumes:
   postgres_data:
 

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict, Optional, List
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 import redis
 import json
@@ -14,6 +15,8 @@ import os
 
 from src.models.forex import ForexRate
 from src.core.config import settings
+from src.stream.candlestick_generator import CandlestickGenerator
+from src.stream.indicator_calculator import IndicatorCalculator
 
 
 class DataProcessorDB:
@@ -23,9 +26,23 @@ class DataProcessorDB:
         """Initialize data processor with database connection"""
         self.logger = logging.getLogger(__name__)
         
-        # Database setup
+        # Database setup (sync for forex_rates)
         self.engine = create_engine(settings.DATABASE_URL)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        
+        # Async database setup (for candlestick and indicators)
+        self.async_engine = create_async_engine(settings.DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://'))
+        self.AsyncSessionLocal = async_sessionmaker(
+            bind=self.async_engine, 
+            class_=AsyncSession, 
+            expire_on_commit=False
+        )
+        
+        # Initialize processors
+        self.candlestick_generator = None
+        self.indicator_calculator = None
+        self._init_processors_task = None
+        self._candlestick_lock = asyncio.Lock()
         
         # Redis setup
         try:
@@ -46,6 +63,10 @@ class DataProcessorDB:
         self.buffer_size = 10
         self.last_flush_time = datetime.utcnow()
         self.flush_interval = 1  # seconds
+        
+        # Indicator calculation tracking
+        self.last_indicator_calc = {}
+        self.indicator_calc_interval = 60  # seconds
         
     def process_price_data(self, data: dict):
         """Process price data and store to database
@@ -102,6 +123,23 @@ class DataProcessorDB:
             # Check if we should flush
             if self._should_flush():
                 self._flush_to_database()
+                
+            # Process candlestick and indicators in background
+            # Use asyncio.create_task if we're in an async context
+            # Otherwise, schedule it to run later
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in an async context, create a task
+                asyncio.create_task(self._process_candlestick_async(price_data.copy()))
+            except RuntimeError:
+                # No running loop, we're in a sync context
+                # Use asyncio.run in a thread with proper isolation
+                import threading
+                threading.Thread(
+                    target=self._run_async_process_candlestick,
+                    args=(price_data.copy(),),
+                    daemon=True
+                ).start()
                 
         except Exception as e:
             self.logger.error(f"Error processing price data: {e}")
@@ -191,6 +229,78 @@ class DataProcessorDB:
         finally:
             db.close()
             
+    def _run_async_process_candlestick(self, price_data: dict):
+        """Run async candlestick processing in a new event loop"""
+        try:
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._process_candlestick_async(price_data))
+            finally:
+                loop.close()
+        except Exception as e:
+            self.logger.error(f"Error in candlestick processing thread: {e}")
+            
+    async def _init_processors(self):
+        """Initialize async processors"""
+        if not self.candlestick_generator:
+            async with self.AsyncSessionLocal() as session:
+                self.candlestick_generator = CandlestickGenerator(session)
+                self.indicator_calculator = IndicatorCalculator(session)
+                self.logger.info("Initialized candlestick and indicator processors")
+                
+    async def _process_candlestick_async(self, data: dict):
+        """Process candlestick data asynchronously"""
+        # Create a new lock for each event loop to avoid cross-loop issues
+        lock = asyncio.Lock()
+            
+        async with lock:
+            try:
+                # Initialize processors if not done
+                if not self.candlestick_generator:
+                    await self._init_processors()
+                    
+                async with self.AsyncSessionLocal() as session:
+                    # Create new instances with the session
+                    candlestick_gen = CandlestickGenerator(session)
+                    indicator_calc = IndicatorCalculator(session)
+                    
+                    # Process tick for candlestick
+                    tick_data = {
+                        'symbol': data.get('currency_pair'),  # Fix: use currency_pair instead of symbol
+                        'timestamp': data.get('timestamp', datetime.utcnow()).timestamp() * 1000 if isinstance(data.get('timestamp'), datetime) else data.get('timestamp', datetime.utcnow().timestamp()) * 1000,
+                        'mid': (data.get('bid', 0) + data.get('ask', 0)) / 2
+                    }
+                    
+                    await candlestick_gen.process_tick(tick_data)
+                    
+                    # Check if we should calculate indicators
+                    symbol = data.get('currency_pair')  # Fix: use currency_pair
+                    now = datetime.utcnow()
+                    last_calc = self.last_indicator_calc.get(symbol)
+                    
+                    if not last_calc or (now - last_calc).total_seconds() >= self.indicator_calc_interval:
+                        # Calculate indicators for 1m timeframe
+                        await indicator_calc.calculate_indicators(symbol, '1m')
+                        self.last_indicator_calc[symbol] = now
+                        self.logger.debug(f"Calculated indicators for {symbol}")
+                        
+            except Exception as e:
+                self.logger.error(f"Error in async processing: {e}")
+            
+    async def generate_historical_candlesticks(self, symbol: str, start_date: datetime, end_date: datetime):
+        """Generate candlesticks from historical forex_rates data"""
+        async with self.AsyncSessionLocal() as session:
+            candlestick_gen = CandlestickGenerator(session)
+            await candlestick_gen.generate_from_historical_data(symbol, start_date, end_date)
+            
+    async def calculate_historical_indicators(self, symbol: str, timeframe: str, start_date: datetime, end_date: datetime):
+        """Calculate indicators for historical candlestick data"""
+        async with self.AsyncSessionLocal() as session:
+            indicator_calc = IndicatorCalculator(session)
+            await indicator_calc.batch_calculate_historical(symbol, timeframe, start_date, end_date)
+
     def close(self):
         """Clean up resources"""
         # Flush any remaining data
@@ -200,3 +310,7 @@ class DataProcessorDB:
         # Close connections
         if self.redis_client:
             self.redis_client.close()
+            
+        # Close async engine
+        if hasattr(self, 'async_engine'):
+            asyncio.create_task(self.async_engine.dispose())

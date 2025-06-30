@@ -4,7 +4,8 @@ from sqlalchemy import func
 
 from src.batch.base import BaseBatchJob
 from src.models.forex import ForexRate
-from src.models.user import User
+from src.models.candlestick import CandlestickData
+from src.models.technical_indicator import TechnicalIndicator
 
 
 class GenerateDailyReportBatch(BaseBatchJob):
@@ -19,25 +20,27 @@ class GenerateDailyReportBatch(BaseBatchJob):
         start_time = datetime.combine(report_date, datetime.min.time())
         end_time = start_time + timedelta(days=1)
         
-        # ユーザー統計
-        user_stats = self._get_user_statistics()
-        
         # 為替レート統計
         forex_stats = self._get_forex_statistics(start_time, end_time)
+        
+        # ローソク足統計
+        candle_stats = self._get_candlestick_statistics(start_time, end_time)
+        
+        # 技術指標統計
+        indicator_stats = self._get_indicator_statistics(start_time, end_time)
         
         # レポート作成
         report = {
             "report_date": report_date.isoformat(),
             "generated_at": datetime.utcnow().isoformat(),
-            "user_statistics": user_stats,
-            "forex_statistics": forex_stats
+            "forex_statistics": forex_stats,
+            "candlestick_statistics": candle_stats,
+            "indicator_statistics": indicator_stats
         }
         
-        # レポートを表示（実際はメール送信やファイル保存など）
+        # レポートを表示
         self.logger.info("=== Daily Report ===")
         self.logger.info(f"Date: {report_date}")
-        self.logger.info(f"Total Users: {user_stats['total_users']}")
-        self.logger.info(f"Active Users: {user_stats['active_users']}")
         
         for pair, stats in forex_stats.items():
             self.logger.info(
@@ -49,17 +52,36 @@ class GenerateDailyReportBatch(BaseBatchJob):
         
         return report
     
-    def _get_user_statistics(self) -> Dict:
-        """ユーザー統計を取得"""
-        total_users = self.db.query(func.count(User.id)).scalar()
-        active_users = self.db.query(func.count(User.id))\
-            .filter(User.is_active == True).scalar()
+    def _get_candlestick_statistics(self, start_time: datetime, end_time: datetime) -> Dict:
+        """ローソク足統計を取得"""
+        stats_query = self.db.query(
+            CandlestickData.symbol,
+            CandlestickData.timeframe,
+            func.count().label('count')
+        ).filter(
+            CandlestickData.created_at >= start_time,
+            CandlestickData.created_at < end_time
+        ).group_by(
+            CandlestickData.symbol,
+            CandlestickData.timeframe
+        ).all()
         
-        return {
-            "total_users": total_users,
-            "active_users": active_users,
-            "inactive_users": total_users - active_users
-        }
+        candle_stats = {}
+        for stat in stats_query:
+            key = f"{stat.symbol}_{stat.timeframe}"
+            candle_stats[key] = {"count": stat.count}
+        
+        return candle_stats
+    
+    def _get_indicator_statistics(self, start_time: datetime, end_time: datetime) -> Dict:
+        """技術指標統計を取得"""
+        count = self.db.query(func.count(TechnicalIndicator.id))\
+            .filter(
+                TechnicalIndicator.created_at >= start_time,
+                TechnicalIndicator.created_at < end_time
+            ).scalar()
+        
+        return {"total_calculations": count}
     
     def _get_forex_statistics(self, start_time: datetime, end_time: datetime) -> Dict:
         """為替レート統計を取得"""
