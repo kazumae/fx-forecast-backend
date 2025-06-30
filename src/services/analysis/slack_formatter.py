@@ -121,10 +121,13 @@ class SlackAnalysisFormatter:
         trend_emoji = {
             "bullish": "📈",
             "bearish": "📉", 
-            "neutral": "➡️"
+            "neutral": "➡️",
+            "強気": "📈",
+            "弱気": "📉",
+            "中立": "➡️"
         }
         
-        trend = result.get("trend", "neutral")
+        trend = result.get("trend", "中立")
         emoji = trend_emoji.get(trend, "➡️")
         
         text = f"*{emoji} 市場トレンド*\n"
@@ -160,17 +163,26 @@ class SlackAnalysisFormatter:
         signal_type = signal.get("type", "N/A")
         confidence = signal.get("confidence", 0) * 100
         entry_price = signal.get("entry_price", 0)
+        stop_loss = signal.get("stop_loss", 0)
+        take_profit = signal.get("take_profit", 0)
         
         emoji = "🟢" if signal_type == "BUY" else "🔴" if signal_type == "SELL" else "⚪"
         
         text = f"*{emoji} エントリーシグナル*\n"
-        text += f"• タイプ: {signal_type}\n"
+        text += f"• タイプ: *{signal_type}*\n"
         if entry_price:
             text += f"• エントリー価格: ${entry_price:,.2f}\n"
+        if stop_loss:
+            text += f"• ストップロス: ${stop_loss:,.2f}\n"
+        if take_profit:
+            text += f"• テイクプロフィット: ${take_profit:,.2f}\n"
         text += f"• 信頼度: {confidence:.0f}%"
         
         if "risk_reward" in signal:
             text += f"\n• リスク/リワード: {signal['risk_reward']}"
+        
+        if "pattern" in signal:
+            text += f"\n• パターン: {signal['pattern']}"
         
         return {
             "type": "section",
@@ -191,7 +203,10 @@ class SlackAnalysisFormatter:
         risk_emoji = {
             "low": "🟢",
             "medium": "🟡",
-            "high": "🔴"
+            "high": "🔴",
+            "低": "🟢",
+            "中": "🟡",
+            "高": "🔴"
         }
         
         emoji = risk_emoji.get(risk_level, "🟡")
@@ -250,24 +265,50 @@ class SlackAnalysisFormatter:
         }
     
     def _create_detailed_section(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """詳細分析セクション（折りたたみ）"""
+        """詳細分析セクション（より読みやすい形式）"""
         detailed = result.get("detailed_analysis", {})
         
-        # 詳細をJSON形式で整形
-        if isinstance(detailed, dict):
-            detailed_text = json.dumps(detailed, indent=2, ensure_ascii=False)
-        else:
-            detailed_text = str(detailed)
+        text = "*📋 詳細分析*\n"
+        
+        # エントリー根拠
+        if "entry_rationale" in detailed:
+            rationale = detailed["entry_rationale"]
+            text += "\n*エントリー根拠:*\n"
+            if isinstance(rationale, dict):
+                if "primary_reason" in rationale:
+                    text += f"• 主要理由: {rationale['primary_reason']}\n"
+                if "confirmation_signals" in rationale:
+                    text += f"• 確認シグナル: {rationale['confirmation_signals']}\n"
+                if "invalidation_level" in rationale:
+                    text += f"• 無効化レベル: ${rationale['invalidation_level']:,.2f}\n"
+        
+        # EMA分析
+        if "ema_analysis" in detailed:
+            ema = detailed["ema_analysis"]
+            text += "\n*EMA分析:*\n"
+            if isinstance(ema, dict):
+                for key, value in ema.items():
+                    if value:
+                        text += f"• {value}\n"
+        
+        # サポート/レジスタンス
+        if "support_resistance" in detailed:
+            sr = detailed["support_resistance"]
+            text += "\n*サポート/レジスタンス:*\n"
+            if isinstance(sr, dict):
+                for key, value in sr.items():
+                    if value:
+                        text += f"• {value}\n"
         
         # 長すぎる場合は切り詰め
-        if len(detailed_text) > 2000:
-            detailed_text = detailed_text[:1997] + "..."
+        if len(text) > 2000:
+            text = text[:1997] + "..."
         
         return {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*📋 詳細分析*\n```\n{detailed_text}\n```"
+                "text": text.rstrip()
             }
         }
     
