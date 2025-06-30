@@ -53,3 +53,4 @@ redis==5.0.1
 
 # Async database driver
 asyncpg==0.30.0
+aiosqlite==0.20.0
