@@ -24,4 +24,13 @@ PATH=/usr/local/bin:/usr/bin:/bin
 # 1分毎にエントリーポイントチェック（XAUUSD）
 * * * * * cd /app && . /etc/environment && python run_batch.py signal_monitor >> /var/log/cron/signal_monitor.log 2>&1
 
+# 1分毎に1分足のEMA更新
+* * * * * cd /app && . /etc/environment && python run_batch.py update_indicators --timeframe 1m --symbol XAUUSD >> /var/log/cron/indicators_1m.log 2>&1
+
+# 15分毎に15分足のEMA更新（0,15,30,45分）
+*/15 * * * * cd /app && . /etc/environment && python run_batch.py update_indicators --timeframe 15m --symbol XAUUSD >> /var/log/cron/indicators_15m.log 2>&1
+
+# 1時間毎に1時間足のEMA更新（毎時0分）
+0 * * * * cd /app && . /etc/environment && python run_batch.py update_indicators --timeframe 1h --symbol XAUUSD >> /var/log/cron/indicators_1h.log 2>&1
+
 # 空行（cronには最後に空行が必要）

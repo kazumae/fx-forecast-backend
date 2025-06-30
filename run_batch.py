@@ -30,6 +30,7 @@ from src.batch.jobs.example_notification import (
 from src.batch.jobs.signal_monitor import SignalMonitorJob
 from src.batch.jobs.signal_monitor_v2 import EnhancedSignalMonitorJob
 from src.batch.jobs.ai_market_analysis import AIMarketAnalysisJob
+from src.batch.jobs.update_indicators import UpdateIndicatorsJob
 
 # ジョブレジストリ
 JOB_REGISTRY: Dict[str, Type[BaseBatchJob]] = {
@@ -42,6 +43,7 @@ JOB_REGISTRY: Dict[str, Type[BaseBatchJob]] = {
     "error_notification_only": ErrorNotificationOnlyBatch,
     "signal_monitor": EnhancedSignalMonitorJob,  # Enhanced version with pattern detection
     "ai_market_analysis": AIMarketAnalysisJob,
+    "update_indicators": UpdateIndicatorsJob,
 }
 
 
@@ -77,6 +79,8 @@ def main():
                        help="Symbol to analyze for AI market analysis")
     parser.add_argument("--dry-run", action="store_true",
                        help="Run without sending notifications")
+    parser.add_argument("--timeframe", type=str,
+                       help="Timeframe for indicator update (1m, 5m, 15m, 1h, 4h, 1d)")
     
     args = parser.parse_args()
     
@@ -105,6 +109,13 @@ def main():
             result = asyncio.run(job.execute(symbol=args.symbol, dry_run=args.dry_run))
             logger.info(f"AI analysis completed: {result}")
             sys.exit(0)
+        elif args.job_name == "update_indicators":
+            job = job_class()
+            # 通常のバッチジョブとして実行
+            with job:
+                result = job.execute(timeframe=args.timeframe, symbol=args.symbol)
+                logger.info(f"Indicator update completed: {result}")
+                sys.exit(0)
         else:
             job = job_class()
         
