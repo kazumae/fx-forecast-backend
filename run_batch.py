@@ -31,6 +31,7 @@ from src.batch.jobs.signal_monitor import SignalMonitorJob
 from src.batch.jobs.signal_monitor_v2 import EnhancedSignalMonitorJob
 from src.batch.jobs.ai_market_analysis import AIMarketAnalysisJob
 from src.batch.jobs.update_indicators import UpdateIndicatorsJob
+from src.batch.jobs.generate_candlesticks import GenerateCandlesticksJob
 
 # ジョブレジストリ
 JOB_REGISTRY: Dict[str, Type[BaseBatchJob]] = {
@@ -44,6 +45,7 @@ JOB_REGISTRY: Dict[str, Type[BaseBatchJob]] = {
     "signal_monitor": EnhancedSignalMonitorJob,  # Enhanced version with pattern detection
     "ai_market_analysis": AIMarketAnalysisJob,
     "update_indicators": UpdateIndicatorsJob,
+    "generate_candlesticks": GenerateCandlesticksJob,
 }
 
 
@@ -81,6 +83,8 @@ def main():
                        help="Run without sending notifications")
     parser.add_argument("--timeframe", type=str,
                        help="Timeframe for indicator update (1m, 5m, 15m, 1h, 4h, 1d)")
+    parser.add_argument("--hours", type=int, default=24,
+                       help="Hours of data to process for candlestick generation")
     
     args = parser.parse_args()
     
@@ -115,6 +119,13 @@ def main():
             with job:
                 result = job.execute(timeframe=args.timeframe, symbol=args.symbol)
                 logger.info(f"Indicator update completed: {result}")
+                sys.exit(0)
+        elif args.job_name == "generate_candlesticks":
+            job = job_class()
+            # 通常のバッチジョブとして実行
+            with job:
+                result = job.execute(symbol=args.symbol, hours=args.hours)
+                logger.info(f"Candlestick generation completed: {result}")
                 sys.exit(0)
         else:
             job = job_class()

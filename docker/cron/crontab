@@ -33,4 +33,7 @@ PATH=/usr/local/bin:/usr/bin:/bin
 # 1時間毎に1時間足のEMA更新（毎時0分）
 0 * * * * cd /app && . /etc/environment && python run_batch.py update_indicators --timeframe 1h --symbol XAUUSD >> /var/log/cron/indicators_1h.log 2>&1
 
+# 5分毎にローソク足生成（ストリーミングのバックアップ）
+*/5 * * * * cd /app && . /etc/environment && python run_batch.py generate_candlesticks --symbol XAUUSD --hours 1 >> /var/log/cron/candlesticks.log 2>&1
+
 # 空行（cronには最後に空行が必要）
