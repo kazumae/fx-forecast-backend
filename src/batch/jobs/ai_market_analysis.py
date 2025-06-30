@@ -457,20 +457,17 @@ class AIMarketAnalysisJob(BaseBatchJob):
             error: 発生したエラー
             context: エラーコンテキスト
         """
-        message = self.slack_formatter.format_error_notification(error, context)
+        # SlackNotifierのエラー通知メソッドを使用
+        job_name = "AI市場分析"
+        error_message = f"{type(error).__name__}: {str(error)}"
         
-        # SlackNotifierの適切なメソッドを使用
-        if hasattr(self.slack_notifier, 'send_webhook_message') and message.get("attachments"):
-            self.slack_notifier.send_webhook_message(
-                text=message["text"],
-                attachments=message.get("attachments")
-            )
-        else:
-            self.slack_notifier.send_message(
-                channel=message["channel"],
-                text=message["text"],
-                blocks=message.get("blocks")
-            )
+        if context:
+            error_message += f"\nContext: {context}"
+        
+        self.slack_notifier.send_error_notification(
+            job_name=job_name,
+            error_message=error_message
+        )
     
     def _summarize_collected_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """収集データのサマリー作成"""
