@@ -16,6 +16,7 @@ from src.services.entry_point.signal_generation import EntrySignalGenerator
 from src.services.entry_point.signal_validation import SignalValidationService
 from src.batch.utils.slack_notifier import SlackNotifier
 from src.batch.signal_detection import SignalDetector, ValidatedSignal
+from src.batch.duplicate_management import DuplicateSignalManager
 
 
 class SignalMonitorJob(BaseBatchJob):
@@ -46,6 +47,9 @@ class SignalMonitorJob(BaseBatchJob):
             self.logger.warning(f"Redis connection failed: {e}")
             self.redis_client = None
             self.redis_enabled = False
+            
+        # Duplicate management
+        self.duplicate_manager = DuplicateSignalManager(self.redis_client)
         
         # Configuration
         self.target_symbols = ["XAUUSD"]  # 監視対象シンボル
@@ -105,6 +109,12 @@ class SignalMonitorJob(BaseBatchJob):
                     f"低:{summary['by_priority']['low']}"
                 )
                 self.set_execution_detail("平均スコア", f"{summary['average_score']:.1f}")
+                
+            # 重複統計を追加
+            duplicate_stats = await self.duplicate_manager.get_duplicate_stats()
+            if duplicate_stats['redis_enabled']:
+                self.set_execution_detail("重複率", f"{duplicate_stats['duplicate_rate']:.1f}%")
+                self.set_execution_detail("総シグナル数", duplicate_stats['total_signals'])
             
             # シグナルが検出された場合は通知
             if detected_signals:
@@ -146,13 +156,10 @@ class SignalMonitorJob(BaseBatchJob):
                         symbol=symbol
                     )
                     
-                    # 重複チェックと記録
+                    # DuplicateSignalManagerで重複チェック
                     for validated in validated_signals:
-                        signal = validated.signal
-                        if not self._is_duplicate_signal(symbol, timeframe, signal):
+                        if not self.duplicate_manager.is_duplicate(validated):
                             all_validated_signals.append(validated)
-                            # 重複防止のためRedisに記録
-                            self._record_signal(symbol, timeframe, signal)
                                 
                 except Exception as e:
                     self.logger.error(f"Error processing {symbol} {timeframe}: {e}")
@@ -178,27 +185,28 @@ class SignalMonitorJob(BaseBatchJob):
             }
         return None
         
-    def _is_duplicate_signal(self, symbol: str, timeframe: str, signal: Dict) -> bool:
-        """重複シグナルかチェック"""
-        if not self.redis_enabled:
-            return False
-            
-        # キー生成（1時間有効）
-        key = f"signal:{symbol}:{timeframe}:{signal.get('type', 'unknown')}"
-        
-        # 既存チェック
-        if self.redis_client.exists(key):
-            return True
-            
-        return False
-        
-    def _record_signal(self, symbol: str, timeframe: str, signal: Dict):
-        """シグナルを記録"""
-        if not self.redis_enabled:
-            return
-            
-        key = f"signal:{symbol}:{timeframe}:{signal.get('type', 'unknown')}"
-        self.redis_client.setex(key, 3600, "1")  # 1時間有効
+    # 旧メソッド（DuplicateSignalManagerに移行済み）
+    # def _is_duplicate_signal(self, symbol: str, timeframe: str, signal: Dict) -> bool:
+    #     """重複シグナルかチェック"""
+    #     if not self.redis_enabled:
+    #         return False
+    #         
+    #     # キー生成（1時間有効）
+    #     key = f"signal:{symbol}:{timeframe}:{signal.get('type', 'unknown')}"
+    #     
+    #     # 既存チェック
+    #     if self.redis_client.exists(key):
+    #         return True
+    #         
+    #     return False
+    #     
+    # def _record_signal(self, symbol: str, timeframe: str, signal: Dict):
+    #     """シグナルを記録"""
+    #     if not self.redis_enabled:
+    #         return
+    #         
+    #     key = f"signal:{symbol}:{timeframe}:{signal.get('type', 'unknown')}"
+    #     self.redis_client.setex(key, 3600, "1")  # 1時間有効
         
     async def _notify_signals(self, signals: List[ValidatedSignal]):
         """検出されたシグナルを通知"""
