@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 class IndicatorCalculator:
     """技術指標計算クラス"""
     
-    def __init__(self, db_session: AsyncSession):
-        self.db_session = db_session
+    def __init__(self, session_factory):
+        self.session_factory = session_factory
         self.min_periods = {
             'ema': 200,  # 最大EMA期間
             'rsi': 14,
@@ -34,28 +34,30 @@ class IndicatorCalculator:
         
     async def calculate_indicators(self, symbol: str, timeframe: str) -> None:
         """指定されたシンボルと時間枠の技術指標を計算"""
-        try:
-            # 必要な期間のローソク足データを取得
-            candles = await self._get_candles(symbol, timeframe, limit=500)
-            
-            if len(candles) < self.min_periods['ema']:
-                logger.warning(f"Not enough data for {symbol} {timeframe}. Need at least {self.min_periods['ema']} candles")
-                return
+        async with self.session_factory() as db_session:
+            try:
+                # 必要な期間のローソク足データを取得
+                candles = await self._get_candles(db_session, symbol, timeframe, limit=500)
                 
-            # データフレームに変換
-            df = self._candles_to_dataframe(candles)
+                if len(candles) < self.min_periods['ema']:
+                    logger.warning(f"Not enough data for {symbol} {timeframe}. Need at least {self.min_periods['ema']} candles")
+                    return
+                    
+                # データフレームに変換
+                df = self._candles_to_dataframe(candles)
+                
+                # 各種指標を計算
+                indicators = await self._calculate_all_indicators(df)
+                
+                # 最新のローソク足に対する指標を保存
+                latest_candle = candles[0]  # ORDER BY timestamp DESC なので最初が最新
+                await self._save_indicators(db_session, symbol, timeframe, latest_candle.open_time, indicators)
+                
+            except Exception as e:
+                logger.error(f"Error calculating indicators for {symbol} {timeframe}: {e}")
+                await db_session.rollback()
             
-            # 各種指標を計算
-            indicators = await self._calculate_all_indicators(df)
-            
-            # 最新のローソク足に対する指標を保存
-            latest_candle = candles[0]  # ORDER BY timestamp DESC なので最初が最新
-            await self._save_indicators(symbol, timeframe, latest_candle.open_time, indicators)
-            
-        except Exception as e:
-            logger.error(f"Error calculating indicators for {symbol} {timeframe}: {e}")
-            
-    async def _get_candles(self, symbol: str, timeframe: str, limit: int) -> List[CandlestickData]:
+    async def _get_candles(self, db_session: AsyncSession, symbol: str, timeframe: str, limit: int) -> List[CandlestickData]:
         """ローソク足データを取得"""
         stmt = select(CandlestickData).where(
             and_(
@@ -64,7 +66,7 @@ class IndicatorCalculator:
             )
         ).order_by(desc(CandlestickData.open_time)).limit(limit)
         
-        result = await self.db_session.execute(stmt)
+        result = await db_session.execute(stmt)
         candles = result.scalars().all()
         
         # 古い順に並び替え（計算用）
@@ -181,7 +183,7 @@ class IndicatorCalculator:
         
         return k_percent, d_percent
         
-    async def _save_indicators(self, symbol: str, timeframe: str, timestamp: datetime, indicators: Dict[str, float]) -> None:
+    async def _save_indicators(self, db_session: AsyncSession, symbol: str, timeframe: str, timestamp: datetime, indicators: Dict[str, float]) -> None:
         """技術指標をデータベースに保存"""
         # 既存のレコードを確認
         stmt = select(TechnicalIndicator).where(
@@ -191,7 +193,7 @@ class IndicatorCalculator:
                 TechnicalIndicator.timestamp == timestamp
             )
         )
-        result = await self.db_session.execute(stmt)
+        result = await db_session.execute(stmt)
         existing = result.scalar_one_or_none()
         
         if existing:
@@ -207,9 +209,9 @@ class IndicatorCalculator:
                 timestamp=timestamp,
                 **{k: v for k, v in indicators.items() if v is not None}
             )
-            self.db_session.add(new_indicator)
+            db_session.add(new_indicator)
             
-        await self.db_session.commit()
+        await db_session.commit()
         
     async def calculate_for_all_timeframes(self, symbol: str) -> None:
         """すべての時間枠で技術指標を計算"""
@@ -221,39 +223,44 @@ class IndicatorCalculator:
             
     async def batch_calculate_historical(self, symbol: str, timeframe: str, start_date: datetime, end_date: datetime) -> None:
         """履歴データに対してバッチで技術指標を計算"""
-        logger.info(f"Batch calculating indicators for {symbol} {timeframe} from {start_date} to {end_date}")
-        
-        # 期間内のローソク足を取得
-        stmt = select(CandlestickData).where(
-            and_(
-                CandlestickData.symbol == symbol,
-                CandlestickData.timeframe == timeframe,
-                CandlestickData.open_time >= start_date,
-                CandlestickData.open_time <= end_date
-            )
-        ).order_by(CandlestickData.open_time)
-        
-        result = await self.db_session.execute(stmt)
-        target_candles = result.scalars().all()
-        
-        logger.info(f"Found {len(target_candles)} candles to process")
-        
-        # 各ローソク足に対して技術指標を計算
-        for i, candle in enumerate(target_candles):
-            # 計算に必要な過去のローソク足を含めて取得
-            candles = await self._get_candles_before(symbol, timeframe, candle.open_time, limit=500)
-            
-            if len(candles) >= self.min_periods['ema']:
-                df = self._candles_to_dataframe(candles)
-                indicators = await self._calculate_all_indicators(df)
-                await self._save_indicators(symbol, timeframe, candle.open_time, indicators)
+        async with self.session_factory() as db_session:
+            try:
+                logger.info(f"Batch calculating indicators for {symbol} {timeframe} from {start_date} to {end_date}")
                 
-                if (i + 1) % 100 == 0:
-                    logger.info(f"Processed {i + 1}/{len(target_candles)} candles")
+                # 期間内のローソク足を取得
+                stmt = select(CandlestickData).where(
+                    and_(
+                        CandlestickData.symbol == symbol,
+                        CandlestickData.timeframe == timeframe,
+                        CandlestickData.open_time >= start_date,
+                        CandlestickData.open_time <= end_date
+                    )
+                ).order_by(CandlestickData.open_time)
+                
+                result = await db_session.execute(stmt)
+                target_candles = result.scalars().all()
+                
+                logger.info(f"Found {len(target_candles)} candles to process")
+                
+                # 各ローソク足に対して技術指標を計算
+                for i, candle in enumerate(target_candles):
+                    # 計算に必要な過去のローソク足を含めて取得
+                    candles = await self._get_candles_before(db_session, symbol, timeframe, candle.open_time, limit=500)
                     
-        logger.info(f"Completed batch calculation for {symbol} {timeframe}")
+                    if len(candles) >= self.min_periods['ema']:
+                        df = self._candles_to_dataframe(candles)
+                        indicators = await self._calculate_all_indicators(df)
+                        await self._save_indicators(db_session, symbol, timeframe, candle.open_time, indicators)
+                        
+                        if (i + 1) % 100 == 0:
+                            logger.info(f"Processed {i + 1}/{len(target_candles)} candles")
+                            
+                logger.info(f"Completed batch calculation for {symbol} {timeframe}")
+            except Exception as e:
+                logger.error(f"Error in batch_calculate_historical: {e}")
+                await db_session.rollback()
         
-    async def _get_candles_before(self, symbol: str, timeframe: str, before_time: datetime, limit: int) -> List[CandlestickData]:
+    async def _get_candles_before(self, db_session: AsyncSession, symbol: str, timeframe: str, before_time: datetime, limit: int) -> List[CandlestickData]:
         """指定時刻以前のローソク足を取得"""
         stmt = select(CandlestickData).where(
             and_(
@@ -263,7 +270,7 @@ class IndicatorCalculator:
             )
         ).order_by(desc(CandlestickData.open_time)).limit(limit)
         
-        result = await self.db_session.execute(stmt)
+        result = await db_session.execute(stmt)
         candles = result.scalars().all()
         
         # 古い順に並び替え（計算用）

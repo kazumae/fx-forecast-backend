@@ -16,17 +16,23 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# cronジョブファイルをコピー
+# cronジョブファイルとスクリプトをコピー
 COPY docker/cron/crontab /etc/cron.d/fx-cron
+COPY docker/cron/entrypoint.sh /app/docker/cron/entrypoint.sh
 
-# cronファイルに実行権限を付与
-RUN chmod 0644 /etc/cron.d/fx-cron
-
-# crontabを適用
-RUN crontab /etc/cron.d/fx-cron
+# cronファイルとスクリプトに実行権限を付与、dos2unixをインストールして改行コードを修正
+RUN apt-get update && apt-get install -y dos2unix && \
+    chmod 0644 /etc/cron.d/fx-cron && \
+    chmod +x /app/docker/cron/entrypoint.sh && \
+    dos2unix /app/docker/cron/entrypoint.sh && \
+    rm -rf /var/lib/apt/lists/*
 
 # ログディレクトリを作成
 RUN mkdir -p /var/log/cron
 
-# cronをフォアグラウンドで実行
-CMD ["cron", "-f"]
+# cronスタートスクリプトをコピー
+COPY docker/cron/start-cron.sh /start-cron.sh
+RUN chmod +x /start-cron.sh
+
+# cronを起動
+CMD ["/start-cron.sh"]

@@ -28,6 +28,8 @@ from src.batch.jobs.example_notification import (
     ErrorNotificationOnlyBatch
 )
 from src.batch.jobs.signal_monitor import SignalMonitorJob
+from src.batch.jobs.signal_monitor_v2 import EnhancedSignalMonitorJob
+from src.batch.jobs.ai_market_analysis import AIMarketAnalysisJob
 
 # ジョブレジストリ
 JOB_REGISTRY: Dict[str, Type[BaseBatchJob]] = {
@@ -38,7 +40,8 @@ JOB_REGISTRY: Dict[str, Type[BaseBatchJob]] = {
     "example_notification": ExampleNotificationBatch,
     "disabled_notification": DisabledNotificationBatch,
     "error_notification_only": ErrorNotificationOnlyBatch,
-    "signal_monitor": SignalMonitorJob,
+    "signal_monitor": EnhancedSignalMonitorJob,  # Enhanced version with pattern detection
+    "ai_market_analysis": AIMarketAnalysisJob,
 }
 
 
@@ -70,6 +73,10 @@ def main():
                        choices=["daily_summary", "rate_alert", "system_status"],
                        default="daily_summary",
                        help="Type of Slack notification to send")
+    parser.add_argument("--symbol", type=str, default="XAUUSD",
+                       help="Symbol to analyze for AI market analysis")
+    parser.add_argument("--dry-run", action="store_true",
+                       help="Run without sending notifications")
     
     args = parser.parse_args()
     
@@ -91,6 +98,13 @@ def main():
             job = job_class(currency_pairs=args.pairs)
         elif args.job_name == "slack_notification":
             job = job_class(notification_type=args.notification_type)
+        elif args.job_name == "ai_market_analysis":
+            job = job_class()
+            # AI分析は非同期なので特別な処理
+            import asyncio
+            result = asyncio.run(job.execute(symbol=args.symbol, dry_run=args.dry_run))
+            logger.info(f"AI analysis completed: {result}")
+            sys.exit(0)
         else:
             job = job_class()
         

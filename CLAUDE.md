@@ -50,6 +50,12 @@ docker-compose exec app python run_batch.py generate_daily_report
 
 # Send Slack notification
 docker-compose exec app python run_batch.py slack_notification --notification-type daily_summary
+
+# AI market analysis
+docker-compose exec app python run_batch.py ai_market_analysis --symbol XAUUSD
+
+# AI market analysis (dry run - no notifications)
+docker-compose exec app python run_batch.py ai_market_analysis --symbol XAUUSD --dry-run
 ```
 
 ### Testing

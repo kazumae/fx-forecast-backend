@@ -13,7 +13,7 @@ from src.core.config import settings
 from src.models.base import Base
 
 # Import all models to ensure they are registered
-from src.models import user, forex
+from src.models import forex, candlestick, technical_indicator, entry_signal
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

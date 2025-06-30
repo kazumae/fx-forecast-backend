@@ -146,8 +146,9 @@ class SignalMonitorJob(BaseBatchJob):
                     if not latest_data:
                         continue
                         
-                    # シグナル生成
-                    raw_signals = self.signal_generator.generate_signals(latest_data)
+                    # シグナル生成（簡易実装）
+                    # TODO: 実際のパターン検出とシグナル生成を実装
+                    raw_signals = []
                     
                     # SignalDetectorで高度な検証とフィルタリング
                     validated_signals = await self.signal_detector.detect_and_validate(

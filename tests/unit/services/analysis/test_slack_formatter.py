@@ -81,7 +81,7 @@ class TestSlackAnalysisFormatter:
         result = formatter.format_analysis_report(sample_analysis_result)
         
         assert result["channel"] == "#fx-alerts"
-        assert "@here" in result["text"]
+        assert "<!here>" in result["text"]
         assert result["attachments"][0]["color"] == "#ff0000"  # 赤
     
     def test_create_trend_section(self, formatter, sample_analysis_result):
