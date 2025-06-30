@@ -27,6 +27,7 @@ from src.batch.jobs.example_notification import (
     DisabledNotificationBatch,
     ErrorNotificationOnlyBatch
 )
+from src.batch.jobs.signal_monitor import SignalMonitorJob
 
 # ジョブレジストリ
 JOB_REGISTRY: Dict[str, Type[BaseBatchJob]] = {
@@ -37,6 +38,7 @@ JOB_REGISTRY: Dict[str, Type[BaseBatchJob]] = {
     "example_notification": ExampleNotificationBatch,
     "disabled_notification": DisabledNotificationBatch,
     "error_notification_only": ErrorNotificationOnlyBatch,
+    "signal_monitor": SignalMonitorJob,
 }
 
 
