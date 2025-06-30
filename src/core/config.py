@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     SLACK_DEFAULT_CHANNEL: str = "#general"
     SLACK_BOT_TOKEN: str = ""
     
+    # Logging
+    LOG_LEVEL: str = "INFO"
+    
+    # Slack Error Notifications
+    SLACK_ERROR_NOTIFICATION_ENABLED: bool = True
+    SLACK_ERROR_NOTIFICATION_COOLDOWN: int = 300
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

@@ -64,12 +64,18 @@ services:
       - TRADERMADE_API_KEY=${TRADERMADE_API_KEY}
       - TRADERMADE_WEBSOCKET_URL=${TRADERMADE_WEBSOCKET_URL:-wss://marketdata.tradermade.com/feedadv}
       - TARGET_SYMBOL=${TARGET_SYMBOL:-XAUUSD}
+      - TARGET_SYMBOLS=${TARGET_SYMBOLS:-XAUUSD}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FILE_PATH=${LOG_FILE_PATH:-/app/logs}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - fx-network
     restart: unless-stopped
-    command: python -m src.stream.stream_client
+    command: python -m src.stream.stream_client_db
 
 volumes:
   postgres_data:

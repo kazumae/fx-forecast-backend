@@ -47,3 +47,6 @@ matplotlib==3.8.2
 
 # Test coverage
 pytest-cov==4.1.0
+
+# Cache
+redis==5.0.1
