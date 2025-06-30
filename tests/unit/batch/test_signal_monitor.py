@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 from src.batch.jobs.signal_monitor import SignalMonitorJob
+from src.batch.signal_detection import ValidatedSignal, SignalPriority
 
 
 class TestSignalMonitorJob:
@@ -20,6 +21,7 @@ class TestSignalMonitorJob:
             job.slack_notifier = MagicMock()
             job.signal_generator = MagicMock()
             job.signal_validator = MagicMock()
+            job.signal_detector = MagicMock()
             return job
             
     def test_initialization(self, monitor_job):
@@ -114,44 +116,84 @@ class TestSignalMonitorJob:
         """シンボルシグナルチェックのテスト"""
         # モックの設定
         monitor_job.signal_generator.generate_signals.return_value = [
-            {"type": "BUY", "strength": 0.8}
+            {
+                "type": "BUY", 
+                "score": 80.0,
+                "entry_price": 1850.0,
+                "current_price": 1850.5,
+                "risk_reward_ratio": 2.0
+            }
         ]
-        monitor_job.signal_validator.validate_signal.return_value = True
+        
+        # ValidatedSignalを返すようにモック
+        validated_signal = ValidatedSignal(
+            signal={"type": "BUY", "score": 80.0},
+            detected_at=datetime.utcnow(),
+            confidence_score=80.0,
+            priority=SignalPriority.MEDIUM,
+            metadata={
+                "symbol": "XAUUSD",
+                "timeframe": "1m",
+                "market_session": "london"
+            }
+        )
+        monitor_job.signal_detector.detect_and_validate = AsyncMock(return_value=[validated_signal])
         monitor_job.redis_enabled = False  # 重複チェックを無効化
         
         with patch.object(monitor_job, '_get_latest_data') as mock_get_data:
             mock_get_data.return_value = {
                 "symbol": "XAUUSD",
-                "bid": 1.1234,
-                "ask": 1.1236,
-                "rate": 1.1235,
+                "bid": 1850.0,
+                "ask": 1850.1,
+                "rate": 1850.05,
                 "timestamp": datetime.utcnow()
             }
             
             signals = await monitor_job._check_symbol_signals("XAUUSD")
             
             assert len(signals) == 3  # 3つの時間枠
-            assert signals[0]["symbol"] == "XAUUSD"
-            assert signals[0]["timeframe"] == "1m"
-            assert signals[0]["signal"]["type"] == "BUY"
+            assert isinstance(signals[0], ValidatedSignal)
+            assert signals[0].metadata["symbol"] == "XAUUSD"
+            assert signals[0].metadata["timeframe"] == "1m"
+            assert signals[0].signal["type"] == "BUY"
             
     @pytest.mark.asyncio
     async def test_notify_signals(self, monitor_job):
         """シグナル通知のテスト"""
         signals = [
-            {
-                "symbol": "XAUUSD",
-                "timeframe": "1m",
-                "signal": {"type": "BUY"},
-                "timestamp": datetime.utcnow()
-            },
-            {
-                "symbol": "XAUUSD",
-                "timeframe": "15m",
-                "signal": {"type": "SELL"},
-                "timestamp": datetime.utcnow()
-            }
+            ValidatedSignal(
+                signal={"type": "BUY", "score": 85.0},
+                detected_at=datetime.utcnow(),
+                confidence_score=85.0,
+                priority=SignalPriority.HIGH,
+                metadata={
+                    "symbol": "XAUUSD",
+                    "timeframe": "1m",
+                    "market_session": "london",
+                    "risk_reward_ratio": 2.5
+                }
+            ),
+            ValidatedSignal(
+                signal={"type": "SELL", "score": 75.0},
+                detected_at=datetime.utcnow(),
+                confidence_score=75.0,
+                priority=SignalPriority.MEDIUM,
+                metadata={
+                    "symbol": "XAUUSD",
+                    "timeframe": "15m",
+                    "market_session": "london",
+                    "risk_reward_ratio": 1.8
+                }
+            )
         ]
+        
+        # モックを設定
+        monitor_job.signal_detector.get_validation_summary.return_value = {
+            "total_validated": 2,
+            "by_priority": {"high": 1, "medium": 1, "low": 0},
+            "average_score": 80.0,
+            "market_sessions": ["london"]
+        }
         
         await monitor_job._notify_signals(signals)
         
@@ -159,6 +201,8 @@ class TestSignalMonitorJob:
         call_args = monitor_job.send_custom_notification.call_args
         assert call_args[1]["title"] == "🎯 エントリーポイント検出"
         assert "2件のシグナル" in call_args[1]["message"]
+        assert "高 1件" in call_args[1]["message"]
+        assert "中 1件" in call_args[1]["message"]
         assert call_args[1]["color"] == "good"
         assert len(call_args[1]["fields"]) == 2
         
@@ -166,15 +210,24 @@ class TestSignalMonitorJob:
     async def test_execute_async(self, monitor_job):
         """非同期実行のテスト"""
         # モックの設定
+        validated_signal = ValidatedSignal(
+            signal={"type": "BUY", "score": 80.0},
+            detected_at=datetime.utcnow(),
+            confidence_score=80.0,
+            priority=SignalPriority.MEDIUM,
+            metadata={"symbol": "XAUUSD", "timeframe": "1m"}
+        )
+        
         with patch.object(monitor_job, '_check_symbol_signals') as mock_check:
-            mock_check.return_value = [
-                {
-                    "symbol": "XAUUSD",
-                    "timeframe": "1m",
-                    "signal": {"type": "BUY"},
-                    "timestamp": datetime.utcnow()
-                }
-            ]
+            mock_check.return_value = [validated_signal]
+            
+            # モックを設定
+            monitor_job.signal_detector.get_validation_summary.return_value = {
+                "total_validated": 1,
+                "by_priority": {"high": 0, "medium": 1, "low": 0},
+                "average_score": 80.0,
+                "market_sessions": ["london"]
+            }
             
             with patch.object(monitor_job, '_notify_signals') as mock_notify:
                 result = await monitor_job._execute_async()

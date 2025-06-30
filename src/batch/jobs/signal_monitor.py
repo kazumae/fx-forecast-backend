@@ -15,6 +15,7 @@ from src.models.forex import ForexRate
 from src.services.entry_point.signal_generation import EntrySignalGenerator
 from src.services.entry_point.signal_validation import SignalValidationService
 from src.batch.utils.slack_notifier import SlackNotifier
+from src.batch.signal_detection import SignalDetector, ValidatedSignal
 
 
 class SignalMonitorJob(BaseBatchJob):
@@ -32,6 +33,7 @@ class SignalMonitorJob(BaseBatchJob):
         # Services
         self.signal_generator = EntrySignalGenerator()
         self.signal_validator = SignalValidationService()
+        self.signal_detector = SignalDetector()
         
         # Redis for duplicate detection
         try:
@@ -94,6 +96,16 @@ class SignalMonitorJob(BaseBatchJob):
             self.set_execution_detail("検出シグナル数", len(detected_signals))
             self.set_execution_detail("エラー数", len(errors))
             
+            # 検証サマリーを追加
+            if detected_signals:
+                summary = self.signal_detector.get_validation_summary(detected_signals)
+                self.set_execution_detail("優先度別", 
+                    f"高:{summary['by_priority']['high']} "
+                    f"中:{summary['by_priority']['medium']} "
+                    f"低:{summary['by_priority']['low']}"
+                )
+                self.set_execution_detail("平均スコア", f"{summary['average_score']:.1f}")
+            
             # シグナルが検出された場合は通知
             if detected_signals:
                 await self._notify_signals(detected_signals)
@@ -109,9 +121,9 @@ class SignalMonitorJob(BaseBatchJob):
             self.logger.error(f"Fatal error in signal monitor: {e}")
             raise
             
-    async def _check_symbol_signals(self, symbol: str) -> List[Dict[str, Any]]:
+    async def _check_symbol_signals(self, symbol: str) -> List[ValidatedSignal]:
         """特定シンボルのシグナルをチェック"""
-        detected_signals = []
+        all_validated_signals = []
         
         # 最新のデータを取得
         with SessionLocal() as db:
@@ -125,27 +137,27 @@ class SignalMonitorJob(BaseBatchJob):
                         continue
                         
                     # シグナル生成
-                    signals = self.signal_generator.generate_signals(latest_data)
+                    raw_signals = self.signal_generator.generate_signals(latest_data)
                     
-                    # シグナル検証
-                    for signal in signals:
-                        if self.signal_validator.validate_signal(signal):
-                            # 重複チェック
-                            if not self._is_duplicate_signal(symbol, timeframe, signal):
-                                detected_signals.append({
-                                    "symbol": symbol,
-                                    "timeframe": timeframe,
-                                    "signal": signal,
-                                    "timestamp": datetime.utcnow()
-                                })
-                                
-                                # 重複防止のためRedisに記録
-                                self._record_signal(symbol, timeframe, signal)
+                    # SignalDetectorで高度な検証とフィルタリング
+                    validated_signals = await self.signal_detector.detect_and_validate(
+                        raw_signals=raw_signals,
+                        timeframe=timeframe,
+                        symbol=symbol
+                    )
+                    
+                    # 重複チェックと記録
+                    for validated in validated_signals:
+                        signal = validated.signal
+                        if not self._is_duplicate_signal(symbol, timeframe, signal):
+                            all_validated_signals.append(validated)
+                            # 重複防止のためRedisに記録
+                            self._record_signal(symbol, timeframe, signal)
                                 
                 except Exception as e:
                     self.logger.error(f"Error processing {symbol} {timeframe}: {e}")
                     
-        return detected_signals
+        return all_validated_signals
         
     def _get_latest_data(self, db: Session, symbol: str, timeframe: str) -> Optional[Dict[str, Any]]:
         """最新データを取得（簡易実装）"""
@@ -188,23 +200,49 @@ class SignalMonitorJob(BaseBatchJob):
         key = f"signal:{symbol}:{timeframe}:{signal.get('type', 'unknown')}"
         self.redis_client.setex(key, 3600, "1")  # 1時間有効
         
-    async def _notify_signals(self, signals: List[Dict[str, Any]]):
+    async def _notify_signals(self, signals: List[ValidatedSignal]):
         """検出されたシグナルを通知"""
         if not signals:
             return
             
+        # 検証サマリーを取得
+        summary = self.signal_detector.get_validation_summary(signals)
+        
+        # 優先度でソート（HIGH > MEDIUM > LOW）
+        priority_order = {"high": 0, "medium": 1, "low": 2}
+        sorted_signals = sorted(signals, key=lambda x: priority_order.get(x.priority.value, 3))
+        
         # Slack通知の構築
         fields = []
-        for signal in signals[:5]:  # 最大5件まで
+        for signal in sorted_signals[:5]:  # 最大5件まで
+            priority_emoji = {
+                "high": "🔴",
+                "medium": "🟡", 
+                "low": "🟢"
+            }.get(signal.priority.value, "⚪")
+            
             fields.append({
-                "title": f"{signal['symbol']} - {signal['timeframe']}",
-                "value": f"Signal: {signal['signal'].get('type', 'Unknown')}",
+                "title": f"{priority_emoji} {signal.metadata['symbol']} - {signal.metadata['timeframe']}",
+                "value": (
+                    f"Signal: {signal.signal.get('type', 'Unknown')}\n"
+                    f"Score: {signal.confidence_score:.1f} | "
+                    f"R:R: {signal.metadata.get('risk_reward_ratio', 'N/A')}"
+                ),
                 "short": True
             })
             
+        # メッセージ作成
+        message = (
+            f"{len(signals)}件のシグナルを検出しました\n"
+            f"優先度: 高 {summary['by_priority']['high']}件 | "
+            f"中 {summary['by_priority']['medium']}件 | "
+            f"低 {summary['by_priority']['low']}件\n"
+            f"平均スコア: {summary['average_score']:.1f}"
+        )
+            
         self.send_custom_notification(
             title="🎯 エントリーポイント検出",
-            message=f"{len(signals)}件のシグナルを検出しました",
+            message=message,
             color="good",
             fields=fields
         )
