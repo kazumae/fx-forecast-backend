@@ -55,6 +55,7 @@ class ForecastReview(Base):
     # Relationships
     forecast = relationship("ForecastRequest", back_populates="reviews")
     review_images = relationship("ForecastReviewImage", back_populates="review", cascade="all, delete-orphan")
+    comments = relationship("ForecastReviewComment", back_populates="review", cascade="all, delete-orphan")
 
 
 class ForecastReviewImage(Base):
@@ -90,3 +91,22 @@ class ForecastComment(Base):
     # Relationships
     forecast = relationship("ForecastRequest", back_populates="comments")
     parent_comment = relationship("ForecastComment", remote_side=[id], backref="replies")
+
+
+class ForecastReviewComment(Base):
+    __tablename__ = "forecast_review_comments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    review_id = Column(Integer, ForeignKey("forecast_reviews.id"), nullable=False)
+    parent_comment_id = Column(Integer, ForeignKey("forecast_review_comments.id"), nullable=True)
+    comment_type = Column(String(20), nullable=False)  # "question", "answer", "note"
+    content = Column(Text, nullable=False)
+    author = Column(String(100), default="User")  # Can be "User" or "AI"
+    is_ai_response = Column(Boolean, default=False)
+    extra_metadata = Column(JSON)  # Extra data like analysis details, confidence level, etc.
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    review = relationship("ForecastReview", back_populates="comments")
+    parent_comment = relationship("ForecastReviewComment", remote_side=[id], backref="replies")

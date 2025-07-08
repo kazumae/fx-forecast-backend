@@ -475,3 +475,32 @@ class AnthropicService:
             "confidence_level": 0.85,
             "raw_analysis": analysis_text
         }
+    
+    async def generate_comment_response(self, context: str) -> str:
+        """Generate AI response for review comments"""
+        
+        system_prompt = """あなたは経験豊富なFXトレーダーであり、トレーダーの成長を支援するコーチです。
+レビューコメントに対して、建設的で具体的なアドバイスを提供してください。
+
+重要な指針：
+- 質問に対して的確に答える
+- トレードの改善点を具体的に示す
+- 励ましと建設的な批評のバランスを保つ
+- 実践的なアドバイスを含める
+- 専門用語は適切に使用するが、必要に応じて説明も加える
+"""
+        
+        response = self.client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=2048,
+            temperature=0.7,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": context
+                }
+            ]
+        )
+        
+        return response.content[0].text

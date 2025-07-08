@@ -5,8 +5,9 @@ from typing import List, Optional, Dict, Tuple
 from datetime import datetime
 
 from app.db.deps import get_db
-from app.models.forecast import ForecastRequest, ForecastReview, ForecastReviewImage
+from app.models.forecast import ForecastRequest, ForecastReview, ForecastReviewImage, ForecastReviewComment
 from app.schemas.review import ReviewResponse, ReviewRequest, ForecastWithReviewsResponse
+from app.schemas.forecast import ReviewCommentCreate, ReviewCommentUpdate, ReviewCommentResponse
 from app.services import AnthropicService
 from app.services.image_storage import ImageStorageService
 from app.services.metadata_service import MetadataService
@@ -229,3 +230,181 @@ async def get_review_image(
         media_type=image.mime_type or "image/jpeg",
         filename=image.filename
     )
+
+
+# Review Comment Endpoints
+@router.get("/review/{review_id}/comments", response_model=List[ReviewCommentResponse])
+async def get_review_comments(
+    review_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    レビューのコメント一覧を取得（トップレベルのコメントのみ、返信は各コメントに含まれる）
+    """
+    # Check if review exists
+    review = db.query(ForecastReview).filter(ForecastReview.id == review_id).first()
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    
+    # Get top-level comments (parent_comment_id is None)
+    comments = db.query(ForecastReviewComment)\
+                 .filter(
+                     ForecastReviewComment.review_id == review_id,
+                     ForecastReviewComment.parent_comment_id.is_(None)
+                 )\
+                 .order_by(ForecastReviewComment.created_at.desc())\
+                 .all()
+    
+    return comments
+
+
+@router.post("/review/{review_id}/comments", response_model=ReviewCommentResponse)
+async def create_review_comment(
+    review_id: int,
+    comment: ReviewCommentCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    レビューに新しいコメントを追加
+    
+    - **comment_type**: "question", "answer", "note"のいずれか
+    - **content**: コメントの内容
+    - **parent_comment_id**: 返信の場合は親コメントのID
+    """
+    # Check if review exists with its forecast
+    review = db.query(ForecastReview)\
+               .options(joinedload(ForecastReview.forecast))\
+               .filter(ForecastReview.id == review_id)\
+               .first()
+               
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    
+    # Validate parent comment if provided
+    if comment.parent_comment_id:
+        parent = db.query(ForecastReviewComment)\
+                   .filter(
+                       ForecastReviewComment.id == comment.parent_comment_id,
+                       ForecastReviewComment.review_id == review_id
+                   )\
+                   .first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent comment not found")
+    
+    # Create comment
+    db_comment = ForecastReviewComment(
+        review_id=review_id,
+        parent_comment_id=comment.parent_comment_id,
+        comment_type=comment.comment_type,
+        content=comment.content,
+        author="User",
+        is_ai_response=False
+    )
+    
+    db.add(db_comment)
+    db.commit()
+    db.refresh(db_comment)
+    
+    # If it's a question type, generate AI answer
+    if comment.comment_type == "question" and not comment.parent_comment_id:
+        try:
+            # Initialize Anthropic service
+            anthropic_service = AnthropicService()
+            
+            # Prepare context
+            context = f"""
+レビュー内容：
+{review.review_response}
+
+元の予測：
+{review.forecast.response}
+
+ユーザーからの質問：
+{comment.content}
+
+この質問に対して、レビューと元の予測の内容を踏まえて具体的かつ建設的な回答を提供してください。
+トレーディングの改善に役立つアドバイスを含めてください。
+"""
+            
+            # Get AI response
+            ai_response = await anthropic_service.generate_comment_response(context)
+            
+            # Create AI answer
+            ai_comment = ForecastReviewComment(
+                review_id=review_id,
+                parent_comment_id=db_comment.id,
+                comment_type="answer",
+                content=ai_response,
+                author="AI",
+                is_ai_response=True,
+                extra_metadata={"confidence": "high", "context": "review_question"}
+            )
+            
+            db.add(ai_comment)
+            db.commit()
+            db.refresh(db_comment)
+            
+        except Exception as e:
+            print(f"Error generating AI response: {e}")
+            # Continue without AI response if it fails
+    
+    return db_comment
+
+
+@router.put("/review/comments/{comment_id}", response_model=ReviewCommentResponse)
+async def update_review_comment(
+    comment_id: int,
+    comment_update: ReviewCommentUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    レビューコメントを更新
+    """
+    # Get comment
+    comment = db.query(ForecastReviewComment)\
+                .filter(ForecastReviewComment.id == comment_id)\
+                .first()
+    
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    
+    # Only allow updating user comments, not AI responses
+    if comment.is_ai_response:
+        raise HTTPException(status_code=403, detail="Cannot update AI-generated comments")
+    
+    # Update content if provided
+    if comment_update.content is not None:
+        comment.content = comment_update.content
+        comment.updated_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(comment)
+    
+    return comment
+
+
+@router.delete("/review/comments/{comment_id}")
+async def delete_review_comment(
+    comment_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    レビューコメントを削除（関連する返信も削除される）
+    """
+    # Get comment
+    comment = db.query(ForecastReviewComment)\
+                .filter(ForecastReviewComment.id == comment_id)\
+                .first()
+    
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    
+    # Only allow deleting user comments, not AI responses (unless deleting parent)
+    if comment.is_ai_response and not comment.parent_comment_id:
+        raise HTTPException(status_code=403, detail="Cannot delete AI-generated comments directly")
+    
+    # Delete comment (cascades to replies)
+    db.delete(comment)
+    db.commit()
+    
+    return {"message": "Comment deleted successfully"}
