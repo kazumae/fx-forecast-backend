@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import datetime
 
 from app.schemas.comment import (
     CommentCreate, CommentResponse, CommentUpdate
@@ -12,6 +13,7 @@ from app.models.forecast import ForecastRequest, ForecastComment, ForecastImage
 from app.db.deps import get_db
 from app.services import AnthropicService
 from app.services.analysis_update_service import AnalysisUpdateService
+from app.services.learning_data_service import LearningDataService
 from app.core.config import settings
 
 router = APIRouter()
@@ -259,6 +261,33 @@ async def update_analysis_from_comment(
     try:
         update_service = AnalysisUpdateService(db)
         result = await update_service.update_analysis_from_comment(request)
+        
+        # Extract learning data from the comment Q&A after analysis update
+        # Comment out for now to avoid delays - can be re-enabled with async task queue
+        # try:
+        #     learning_service = LearningDataService(db)
+        #     comment = db.query(ForecastComment).filter(
+        #         ForecastComment.id == request.comment_id
+        #     ).first()
+        #     if comment and comment.comment_type == "question":
+        #         insights = await learning_service.extract_comment_insights(comment)
+        #         forecast = db.query(ForecastRequest).filter(
+        #             ForecastRequest.id == comment.forecast_id
+        #         ).first()
+        #         if forecast:
+        #             if not forecast.extra_metadata:
+        #                 forecast.extra_metadata = {}
+        #             if "comment_insights" not in forecast.extra_metadata:
+        #                 forecast.extra_metadata["comment_insights"] = []
+        #             forecast.extra_metadata["comment_insights"].append(insights)
+        #             compiled_data = await learning_service.compile_learning_data(days_back=7)
+        #             await learning_service.save_learning_data(
+        #                 compiled_data, 
+        #                 filename=f"realtime_update_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        #             )
+        #             db.commit()
+        # except Exception as e:
+        #     print(f"Failed to extract learning data from comment: {e}")
         
         return AnalysisUpdateResponse(**result)
     except ValueError as e:

@@ -9,6 +9,7 @@ from app.services import AnthropicService, SlackService
 from app.services.image_storage import ImageStorageService
 from app.services.metadata_service import MetadataService
 from app.services.enhanced_pattern_service import EnhancedPatternService
+from app.services.learning_data_service import LearningDataService
 from app.models.forecast import ForecastRequest, ForecastImage
 from app.db.deps import get_db
 from app.core.config import settings
@@ -19,7 +20,9 @@ router = APIRouter()
 
 def load_logic_files() -> str:
     """Load all logic files from docs/logic directory"""
-    logic_dir = "/Users/kazu/Develop/kazumae/fx/fx-forecast-03/docs/logic"
+    # Use container path when running in Docker, local path otherwise
+    base_path = os.environ.get("APP_BASE_PATH", "/app")
+    logic_dir = os.path.join(base_path, "docs", "logic")
     logic_content = ""
     
     logic_files = [
@@ -109,19 +112,45 @@ async def analyze_charts_v2(
         logic_content = load_logic_files()
         
         # Initialize services
-        anthropic_service = AnthropicService()
-        slack_service = SlackService()
-        image_storage = ImageStorageService()
-        enhanced_pattern_service = EnhancedPatternService(db)
+        try:
+            anthropic_service = AnthropicService()
+        except Exception as e:
+            print(f"Failed to initialize AnthropicService: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to initialize AnthropicService: {str(e)}")
+        
+        try:
+            slack_service = SlackService()
+            image_storage = ImageStorageService()
+            enhanced_pattern_service = EnhancedPatternService(db)
+        except Exception as e:
+            print(f"Failed to initialize other services: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to initialize services: {str(e)}")
+        
+        # Try to initialize learning service
+        learning_service = None
+        try:
+            learning_service = LearningDataService(db)
+        except Exception as e:
+            print(f"Warning: Failed to initialize LearningDataService: {e}")
         
         # Get timeframes list for pattern analysis
         timeframes_list = [tf for tf, _ in images_with_timeframes]
         
-        # Get comprehensive pattern context
+        # Get comprehensive pattern context from historical data
         pattern_context = enhanced_pattern_service.get_comprehensive_pattern_context(
             currency_pair="XAUUSD",
             timeframes=timeframes_list
         )
+        
+        # Add learning data summary to pattern context
+        if learning_service:
+            try:
+                learning_summary = learning_service.get_pattern_success_summary()
+                if learning_summary:
+                    pattern_context += f"\n\n{learning_summary}"
+            except Exception as e:
+                print(f"Warning: Failed to get learning data summary: {e}")
+                # Continue without learning data if it fails
         
         # Analyze charts with Anthropic including pattern context
         analysis_result = await anthropic_service.analyze_charts_with_timeframes(
@@ -173,6 +202,18 @@ async def analyze_charts_v2(
         
         db.commit()
         
+        # Extract and save pattern metadata for future learning
+        if learning_service:
+            try:
+                pattern_metadata = await learning_service.extract_pattern_metadata(db_request)
+                # Store metadata in the extra_metadata field
+                db_request.extra_metadata = db_request.extra_metadata or {}
+                db_request.extra_metadata["pattern_analysis"] = pattern_metadata
+                db.commit()
+            except Exception as e:
+                print(f"Error extracting pattern metadata: {e}")
+                # Continue without pattern metadata if it fails
+        
         # Send to Slack
         slack_notified = await slack_service.send_notification(
             analysis_result, 
@@ -187,6 +228,9 @@ async def analyze_charts_v2(
         )
         
     except Exception as e:
+        import traceback
+        print(f"Error in /analyze/v2: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

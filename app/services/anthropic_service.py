@@ -1,9 +1,16 @@
 import base64
+import io
 from typing import List, Tuple, Optional, Dict, Any
+from PIL import Image
 from anthropic import Anthropic
 from app.core.config import settings
 from app.core.prompts import get_full_prompt
 from app.core.trade_review_prompts import get_trade_review_prompts
+from app.services.advanced_analysis_service import (
+    AdvancedAnalysisService, 
+    TrendDirection,
+    MarketCondition
+)
 
 
 class AnthropicService:
@@ -12,11 +19,43 @@ class AnthropicService:
             raise ValueError("ANTHROPIC_API_KEY is not set")
         self.client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     
+    def _detect_image_format(self, image_data: bytes) -> Tuple[str, bytes]:
+        """Detect image format and convert if necessary"""
+        try:
+            # Open image to detect format
+            image = Image.open(io.BytesIO(image_data))
+            format = image.format.lower() if image.format else 'jpeg'
+            
+            # Anthropic supports JPEG, PNG, GIF, and WebP
+            if format in ['jpeg', 'jpg']:
+                return 'image/jpeg', image_data
+            elif format == 'png':
+                return 'image/png', image_data
+            elif format == 'gif':
+                return 'image/gif', image_data
+            elif format == 'webp':
+                return 'image/webp', image_data
+            else:
+                # Convert to JPEG if format is not supported
+                output = io.BytesIO()
+                # Convert RGBA to RGB if necessary
+                if image.mode in ('RGBA', 'LA', 'P'):
+                    rgb_image = Image.new('RGB', image.size, (255, 255, 255))
+                    rgb_image.paste(image, mask=image.split()[-1] if image.mode in ('RGBA', 'LA') else None)
+                    image = rgb_image
+                image.save(output, format='JPEG', quality=95)
+                return 'image/jpeg', output.getvalue()
+        except Exception as e:
+            print(f"Error detecting image format: {e}")
+            # Default to JPEG if detection fails
+            return 'image/jpeg', image_data
+    
     async def analyze_charts_with_timeframes(
         self, 
         images_with_timeframes: List[Tuple[str, bytes]], 
         logic_content: str,
-        pattern_context: Optional[str] = None
+        pattern_context: Optional[str] = None,
+        enable_advanced_analysis: bool = True
     ) -> str:
         """Analyze chart images with timeframe labels using Anthropic API"""
         
@@ -37,17 +76,55 @@ class AnthropicService:
                 "text": f"\n【{timeframe}チャート】"
             })
             
+            # Detect image format and convert if necessary
+            media_type, processed_image_data = self._detect_image_format(image_data)
+            
             # Convert image to base64
-            base64_image = base64.b64encode(image_data).decode('utf-8')
+            base64_image = base64.b64encode(processed_image_data).decode('utf-8')
             
             content.append({
                 "type": "image",
                 "source": {
                     "type": "base64",
-                    "media_type": "image/jpeg",
+                    "media_type": media_type,
                     "data": base64_image
                 }
             })
+        
+        # Perform advanced analysis if enabled
+        advanced_analysis_prompt = None
+        if enable_advanced_analysis:
+            # Initialize advanced analysis service
+            advanced_service = AdvancedAnalysisService()
+            
+            # Create mock data for demonstration
+            # In production, this would extract actual data from chart images
+            timeframe_data = {}
+            for tf, _ in images_with_timeframes:
+                timeframe_data[tf] = {
+                    "current_price": 150.00,  # Example for USD/JPY
+                    "ema20": 149.95,
+                    "ema75": 149.90,
+                    "ema200": 149.85,
+                    "atr": 25,
+                    "recent_ranges": [20, 25, 30, 22, 28],
+                    "support_levels": [149.50, 149.00],
+                    "resistance_levels": [150.50, 151.00]
+                }
+            
+            # Perform volatility analysis
+            volatility_analysis = advanced_service.analyze_volatility(
+                timeframe_data.get("15分", timeframe_data.get("1時間", {})), 
+                "15分"
+            )
+            
+            # Perform multi-timeframe analysis
+            mtf_analysis = advanced_service.perform_multi_timeframe_analysis(timeframe_data)
+            
+            # Generate enhanced prompt
+            advanced_analysis_prompt = advanced_service.generate_enhanced_analysis_prompt(
+                volatility_analysis, mtf_analysis
+            )
         
         # Add analysis request
         content.append({
@@ -55,8 +132,8 @@ class AnthropicService:
             "text": "\n提供された全ての時間足を総合的に分析し、最適なエントリーポイントと、そのエントリーを実行すべき時間足（1分足でのエントリーか、5分足でのエントリーか等）を明確に指定してください。\n\n重要：かむかむ流の各ポイントの方向性を正確に理解し、適用してください。特にポイント3は「上昇→下降」でショート方向のエントリーポイントです。"
         })
         
-        # Get full system prompt with logic
-        system_prompt = get_full_prompt(logic_content)
+        # Get full system prompt with logic and advanced analysis
+        system_prompt = get_full_prompt(logic_content, advanced_analysis_prompt)
         
         # Add pattern context if provided
         if pattern_context:
@@ -100,14 +177,17 @@ class AnthropicService:
                 "text": f"\n【{timeframe}チャート】"
             })
             
+            # Detect image format and convert if necessary
+            media_type, processed_image_data = self._detect_image_format(image_data)
+            
             # Convert image to base64
-            base64_image = base64.b64encode(image_data).decode('utf-8')
+            base64_image = base64.b64encode(processed_image_data).decode('utf-8')
             
             content.append({
                 "type": "image",
                 "source": {
                     "type": "base64",
-                    "media_type": "image/jpeg",
+                    "media_type": media_type,
                     "data": base64_image
                 }
             })
@@ -135,14 +215,17 @@ class AnthropicService:
         content = []
         
         for i, image_data in enumerate(images):
+            # Detect image format and convert if necessary
+            media_type, processed_image_data = self._detect_image_format(image_data)
+            
             # Convert image to base64
-            base64_image = base64.b64encode(image_data).decode('utf-8')
+            base64_image = base64.b64encode(processed_image_data).decode('utf-8')
             
             content.append({
                 "type": "image",
                 "source": {
                     "type": "base64",
-                    "media_type": "image/jpeg",  # Assuming JPEG, adjust if needed
+                    "media_type": media_type,
                     "data": base64_image
                 }
             })

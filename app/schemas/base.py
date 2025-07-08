@@ -27,3 +27,8 @@ class BaseSchema(BaseModel):
                     setattr(self, field_name, ensure_jst(value))
         
         return self
+
+
+class MessageResponse(BaseModel):
+    """Simple message response schema"""
+    message: str

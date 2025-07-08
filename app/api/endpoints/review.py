@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form, Request
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Dict, Tuple
+from datetime import datetime
 
 from app.db.deps import get_db
 from app.models.forecast import ForecastRequest, ForecastReview, ForecastReviewImage
@@ -9,6 +10,7 @@ from app.schemas.review import ReviewResponse, ReviewRequest, ForecastWithReview
 from app.services import AnthropicService
 from app.services.image_storage import ImageStorageService
 from app.services.metadata_service import MetadataService
+from app.services.learning_data_service import LearningDataService
 from app.core.review_prompts import get_review_prompt
 from app.api.endpoints.analysis import process_timeframe_files
 
@@ -73,8 +75,10 @@ async def create_forecast_review(
         image_storage = ImageStorageService()
         metadata_service = MetadataService()
         
-        # Create review prompt
-        review_prompt = get_review_prompt(forecast.response)
+        # Create review prompt with forecast creation time
+        forecast_datetime = forecast.created_at.strftime("%Y年%m月%d日 %H:%M:%S")
+        enhanced_response = f"【予測作成日時】{forecast_datetime}\n\n{forecast.response}"
+        review_prompt = get_review_prompt(enhanced_response)
         
         # Analyze with review prompt using the review-specific method
         review_analysis = await anthropic_service.analyze_review(
@@ -130,6 +134,25 @@ async def create_forecast_review(
         
         db.commit()
         db.refresh(review)
+        
+        # Extract learning data from the review in background (non-blocking)
+        # Comment out for now to avoid delays - can be re-enabled with async task queue
+        # try:
+        #     learning_service = LearningDataService(db)
+        #     learning_data = await learning_service.extract_review_learning_data(review)
+        #     if not forecast.extra_metadata:
+        #         forecast.extra_metadata = {}
+        #     if "review_learning_data" not in forecast.extra_metadata:
+        #         forecast.extra_metadata["review_learning_data"] = []
+        #     forecast.extra_metadata["review_learning_data"].append(learning_data)
+        #     compiled_data = await learning_service.compile_learning_data(days_back=7)
+        #     await learning_service.save_learning_data(
+        #         compiled_data, 
+        #         filename=f"review_update_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        #     )
+        #     db.commit()
+        # except Exception as e:
+        #     print(f"Failed to extract learning data from review: {e}")
         
         # Add URLs to response
         base_url = str(request.base_url).rstrip('/')
